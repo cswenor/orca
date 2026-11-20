@@ -80,6 +80,20 @@ describe('a paired Orca coordinating its Run on this server', () => {
     return db.getPeerRunForConversation(conversationId)!.run_id
   }
 
+  it.each(['orchestration.ackMessages', 'orchestration.check'])(
+    'refuses a peer selective acknowledgment through %s before materializing its Run',
+    async (method) => {
+      await expect(peerCall(method, { ackIds: ['msg_selected'] })).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: 'invalid_argument',
+          message: expect.stringContaining('peer-Orca federation callers')
+        }
+      })
+      expect(db.getPeerRunForConversation(conversationId)).toBeUndefined()
+    }
+  )
+
   async function pull(id: string, params: Record<string, unknown> = {}) {
     const response = await dispatcher.dispatch(
       {

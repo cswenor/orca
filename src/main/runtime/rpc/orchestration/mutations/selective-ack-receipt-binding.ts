@@ -1,12 +1,9 @@
 import { ORCHESTRATION_UNBOUND_RUN_ID } from '../../../../../shared/orchestration/orchestration-rpc-contract'
-import {
-  sessionCallerOf,
-  type OrchestrationEntryCaller
-} from '../../../orchestration/addressing/orchestration-caller-identity'
+import type { OrchestrationEntryCaller } from '../../../orchestration/addressing/orchestration-caller-identity'
 import { getMessagesByIds } from '../../../orchestration/db/messages/messages-by-id'
-import { OrchestrationError } from '../../../orchestration/orchestration-error'
 import type { OrcaRuntimeService } from '../../../orca-runtime'
 import type { RpcRequest } from '../../core'
+import { assertSelectiveAckCaller } from '../callers/selective-ack-caller'
 import {
   orchestrationCallerIdentity,
   resolveRunScope
@@ -34,14 +31,7 @@ export function selectiveAckReceiptBinding(
   const handle = terminal ?? 'unknown'
   const livePane = runtime.getTerminalPaneKey(handle)
   const process = runtime.getTerminalProcessIncarnation(handle)
-  const lease = sessionCallerOf(caller)?.revalidateAckLease?.()
-  if (!process && !lease && caller?.kind !== 'peer') {
-    throw new OrchestrationError(
-      'consumer_fenced',
-      'A selective acknowledgment receipt requires a live mailbox caller.',
-      { effectsApplied: false }
-    )
-  }
+  const lease = assertSelectiveAckCaller(caller, process)
   if (run === ORCHESTRATION_UNBOUND_RUN_ID) {
     return { process, lease, direct: handle }
   }

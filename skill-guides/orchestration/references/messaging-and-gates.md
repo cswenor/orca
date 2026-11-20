@@ -36,3 +36,6 @@ again. Do not use this to discard mail the agent has not processed.
 Do not combine `--ack-ids` with other read, acknowledgment, formatting or wait
 options. Both the CLI and the execution host need selective-ack support; older
 hosts and the legacy SSH bridge are refused before consumption.
+Peer-Orca federation callers cannot selectively acknowledge mail without a
+local mailbox lease; paired clients addressing a live execution terminal are
+not subject to that limitation.

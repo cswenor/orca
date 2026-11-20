@@ -41,6 +41,25 @@ describe('orchestration check identity', () => {
       json
     } as never)
 
+  it('does not issue any check RPC when the execution host lacks selective ack', async () => {
+    await expect(invokeCheck(new Map([['ack-ids', 'msg_selected']]))).rejects.toMatchObject({
+      code: 'incompatible_runtime'
+    })
+    expect(callMock.mock.calls.map(([method]) => method)).toEqual(['status.get'])
+  })
+
+  it('rejects --ack-ids with --wait before contacting the runtime', async () => {
+    await expect(
+      invokeCheck(
+        new Map<string, string | boolean>([
+          ['ack-ids', 'msg_selected'],
+          ['wait', true]
+        ])
+      )
+    ).rejects.toThrow()
+    expect(callMock).not.toHaveBeenCalled()
+  })
+
   it('rejects an empty --terminal instead of consuming the ambient mailbox', async () => {
     process.env.ORCA_TERMINAL_HANDLE = 'term_coord'
 

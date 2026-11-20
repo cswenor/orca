@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { createRootDispatch } from '../../../../orchestration/db/root-dispatch-test-fixture'
+import {
+  createRootDispatch,
+  reattachDispatchConsumer
+} from '../../../../orchestration/db/root-dispatch-test-fixture'
 import { createOrchestrationRpcHarness } from '../rpc-test-harness'
 import { RpcDispatcher } from '../../../dispatcher'
 import { ORCHESTRATION_METHODS } from '../orchestration'
@@ -100,6 +103,60 @@ it('keeps a bound Run selection separate from explicit unbound direct mail', asy
   await expect(acknowledge(['msg_unbound'], 'run_unbound')).resolves.toMatchObject({
     markedIds: ['msg_unbound']
   })
+})
+
+it('refuses a stale terminal and saved pane without a mutation ID', async () => {
+  const { db, runtime, activeRunId } = harness.setup()
+  const selected = db.insertMessage({
+    from: 'term_sender',
+    to: `run:${activeRunId}`,
+    subject: 'leave unread'
+  })
+  vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(null)
+  vi.mocked(runtime.getTerminalProcessIncarnation).mockReturnValue(null)
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+  await expect(
+    dispatcher.dispatch({
+      id: 'rpc_stale_selective_ack',
+      authToken: 'test',
+      method: 'orchestration.ackMessages',
+      params: {
+        terminal: 'term_coord',
+        terminalPaneKey: harness.coordinatorPaneKey,
+        ackIds: [selected.id]
+      },
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION
+    })
+  ).resolves.toMatchObject({ ok: false, error: { code: 'consumer_fenced' } })
+  expect(db.getMessageById(selected.id)?.read).toBe(0)
+})
+
+it('fences an implicit Dispatch selection when a Run becomes current during custody', async () => {
+  const { db, runtime, ctx } = harness.setup()
+  const pane = 'tab_worker:33333333-3333-4333-9333-333333333333'
+  vi.mocked(runtime.getTerminalPaneKey).mockImplementation((handle) =>
+    handle === 'term_worker' ? pane : harness.coordinatorPaneKey
+  )
+  const task = db.createTask({ spec: 'worker before binding' })
+  const dispatch = createRootDispatch(db, task.id, 'term_worker', pane)
+  const selected = db.insertMessage({
+    from: 'term_coord',
+    to: `dispatch:${dispatch.id}`,
+    runId: dispatch.run_id,
+    subject: 'pre-bind question'
+  })
+  const pending = harness.call(
+    'orchestration.ackMessages',
+    { terminal: 'term_worker', ackIds: [selected.id] },
+    ctx
+  )
+  db.createRun({
+    objective: 'now coordinate',
+    coordinatorHandle: 'term_worker',
+    coordinatorPaneKey: pane
+  })
+  await expect(pending).rejects.toMatchObject({ code: 'consumer_fenced' })
+  expect(db.getMessageById(selected.id)?.read).toBe(0)
 })
 
 it('replays only on the original process and implicit Run', async () => {
@@ -225,7 +282,7 @@ it('selectively acknowledges pre-bind Dispatch mail without disturbing an outsta
   })
 })
 
-it('records the Dispatch mailbox identity with the selective acknowledgment', async () => {
+it('rejects the wrong owning Run and keeps a receipt on the original Dispatch generation', async () => {
   const { db, runtime, ctx, activeRunId } = harness.setup()
   const pane = 'tab_worker:33333333-3333-4333-9333-333333333333'
   vi.mocked(runtime.getTerminalPaneKey).mockImplementation((handle) =>
@@ -237,29 +294,55 @@ it('records the Dispatch mailbox identity with the selective acknowledgment', as
     id: 'msg_worker_selected',
     from: 'term_coord',
     to: `dispatch:${dispatch.id}`,
+    runId: dispatch.run_id,
     subject: 'selected status'
   })
-  const identity = {
-    callerFingerprint: 'caller_worker',
-    requestId: 'selected_worker_ack',
-    method: 'orchestration.ackMessages',
-    payloadHash: 'selected_worker_payload'
-  }
-  db.beginMutationReceipt(identity)
-  ctx.recordMutationReceipt = (receipt) => {
-    db.completeMutationReceipt({ ...identity, receipt: JSON.stringify(receipt) })
-  }
-  await harness.call(
-    'orchestration.ackMessages',
-    { terminal: 'term_worker', ackIds: ['msg_worker_selected'] },
-    ctx
-  )
-  expect(
-    JSON.parse(db.getMutationReceipt('caller_worker', 'selected_worker_ack')!.receipt!)
-  ).toMatchObject({
-    runId: activeRunId,
+  const { id: wrongRunId } = db.createRun({ objective: 'unrelated Run' })
+  const wrongRun = db.insertMessage({
+    from: 'term_coord',
+    to: `dispatch:${dispatch.id}`,
+    runId: wrongRunId,
+    subject: 'wrong Run, same address'
+  })
+  await expect(
+    harness.call(
+      'orchestration.ackMessages',
+      { terminal: 'term_worker', ackIds: ['msg_worker_selected', wrongRun.id] },
+      ctx
+    )
+  ).rejects.toMatchObject({ code: 'invalid_argument' })
+  expect(db.getMessageById('msg_worker_selected')?.read).toBe(0)
+  expect(db.getMessageById(wrongRun.id)?.read).toBe(0)
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+  const acknowledge = () =>
+    dispatcher.dispatch({
+      id: 'rpc_worker_ack',
+      authToken: 'test',
+      method: 'orchestration.ackMessages',
+      params: { terminal: 'term_worker', ackIds: ['msg_worker_selected'] },
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+      orchestrationRequestId: 'selected_worker_ack'
+    })
+  await expect(acknowledge()).resolves.toMatchObject({
+    ok: true,
+    result: {
+      runId: activeRunId,
+      dispatchId: dispatch.id,
+      markedIds: ['msg_worker_selected']
+    }
+  })
+  await expect(acknowledge()).resolves.toMatchObject({
+    ok: true,
+    result: { mutation: { replayed: true } }
+  })
+  reattachDispatchConsumer(db, {
     dispatchId: dispatch.id,
-    markedIds: ['msg_worker_selected']
+    paneKey: pane,
+    processIncarnation: 'runtime_test:term_worker:1'
+  })
+  await expect(acknowledge()).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'request_mismatch' }
   })
   expect(db.getMessageById('msg_worker_selected')?.read).toBe(1)
 })

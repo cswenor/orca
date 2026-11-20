@@ -23,6 +23,7 @@ import {
   sessionCallerOf
 } from '../../../../orchestration/addressing/orchestration-caller-identity'
 import { orchestrationCallerIdentity } from '../runs/run-scope'
+import { assertSelectiveAckCaller } from '../../../orchestration/callers/selective-ack-caller'
 import {
   callerHoldsDispatchPane,
   dispatchFenced,
@@ -88,7 +89,7 @@ export const ORCHESTRATION_CHECK_METHODS = [
       const process = runtime.getTerminalProcessIncarnation(handle)
       const revalidateCaller = () => {
         if (params.ackIds) {
-          reader?.revalidateAckLease?.()
+          assertSelectiveAckCaller(orchestrationCaller, process)
         }
         if (
           runtime.getTerminalPaneKey(handle) !== livePane ||
@@ -184,6 +185,15 @@ export const ORCHESTRATION_CHECK_METHODS = [
               reconciliation,
               reader,
               revalidateCaller,
+              ...(params.ackIds
+                ? {
+                    revalidateConsumer: () => {
+                      if (db.getCurrentRunForCoordinator(caller)) {
+                        throw dispatchFenced()
+                      }
+                    }
+                  }
+                : {}),
               acknowledgeOnly: !params.wait
             })
           )

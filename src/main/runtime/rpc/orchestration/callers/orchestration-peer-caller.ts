@@ -8,6 +8,7 @@ import {
   peerCoordinatorCaller,
   type OrchestrationPeerCaller
 } from '../../../orchestration/addressing/orchestration-caller-identity'
+import { isSelectiveAckRequest, selectiveAckPeerError } from './selective-ack-caller'
 
 const NO_EFFECTS = { effectsApplied: false } as const
 
@@ -42,6 +43,10 @@ export function admitOrchestrationPeerCall(
       NO_EFFECTS
     )
   }
+  const params: unknown = request.params
+  if (isSelectiveAckRequest(request)) {
+    throw selectiveAckPeerError()
+  }
   const peerRun = RemoteOwnedPeerRun.safeParse(request.orchestrationPeerRun)
   if (!peerRun.success || !isGeneratedId(peerRun.data.conversationId, 'peerconv')) {
     throw new OrchestrationError(
@@ -57,7 +62,6 @@ export function admitOrchestrationPeerCall(
   )
   // Terminal attestation and pane keys name callers on the host that has them, never this one.
   const peerRequest = { ...request, orchestrationCompatibilityEvidence: undefined }
-  const params: unknown = request.params
   if (!params || typeof params !== 'object' || Array.isArray(params)) {
     return { request: peerRequest, caller }
   }

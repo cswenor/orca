@@ -87,6 +87,7 @@ export async function checkRunPendingMail(args: {
           residual && ownsResidual()
             ? {
                 mailbox: `dispatch:${residual.id}`,
+                runId: residual.run_id,
                 revalidate: () => {
                   const current = db.getActiveDispatchForIdentity(handle, paneKey)
                   if (

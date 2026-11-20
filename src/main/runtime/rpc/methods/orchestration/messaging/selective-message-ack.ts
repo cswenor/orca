@@ -15,7 +15,7 @@ export async function acknowledgeSelectedMessages(args: {
   runId?: string
   recordReceipt?: (receipt: unknown) => void
   mailboxIdentity?: { runId: string; dispatchId?: string }
-  residual?: { mailbox: string; revalidate: () => void }
+  residual?: { mailbox: string; runId: string; revalidate: () => void }
   revalidateConsumer: () => void
 }) {
   const { db, mailbox, residual } = args
@@ -31,10 +31,14 @@ export async function acknowledgeSelectedMessages(args: {
     const rows = getMessagesByIds(db, ids)
     const messages = ids.map((id) => {
       const message = rows.get(id)
+      const runId =
+        residual && message?.to_handle === residual.mailbox
+          ? residual.runId
+          : (args.mailboxIdentity?.runId ?? args.runId)
       if (
         !message ||
         (message.to_handle !== mailbox && message.to_handle !== residual?.mailbox) ||
-        (args.runId !== undefined && message.run_id !== args.runId)
+        (runId !== undefined && message.run_id !== runId)
       ) {
         throw new OrchestrationError(
           'invalid_argument',
@@ -75,8 +79,7 @@ export async function acknowledgeSelectedMessages(args: {
       // A routed row no longer belongs to the observed custody source.
       if (
         current.some(
-          (row, i) =>
-            row.to_handle !== selected[i]?.to_handle || row.run_id !== selected[i]?.run_id
+          (row, i) => row.to_handle !== selected[i]?.to_handle || row.run_id !== selected[i]?.run_id
         )
       ) {
         throw new OrchestrationError(

@@ -123,7 +123,7 @@ describe('a structured worker that names itself by session id', () => {
         orchestrationRequest(
           'orchestration.ackMessages',
           { ackIds: [message.id] },
-          { sessionId: workerSession }
+          { sessionId: workerSession, requestId: 'selective_wake_up_ack' }
         )
       )
 
@@ -135,5 +135,11 @@ describe('a structured worker that names itself by session id', () => {
 
     record.lease = { ...record.lease, claimStatus: 'live' }
     expect(resultOf(await acknowledge())).toMatchObject({ markedIds: [message.id] })
+    expect(resultOf(await acknowledge())).toMatchObject({ mutation: { replayed: true } })
+    record.lease = { ...record.lease, runtimeFence: record.lease.runtimeFence + 1 }
+    expect(await acknowledge()).toMatchObject({
+      ok: false,
+      error: { code: 'request_mismatch' }
+    })
   })
 })
