@@ -40,6 +40,7 @@ export function assertSelectiveAckCaller(
     authority.terminalHandle !== handle ||
     !authority.ptyId ||
     !authority.paneKey ||
+    authority.paneKey !== runtime.getTerminalPaneKey(handle) ||
     authority.processIncarnation !== process
   ) {
     throw new OrchestrationError(

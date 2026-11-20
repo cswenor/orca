@@ -132,6 +132,40 @@ it('refuses a stale terminal even when a saved pane and request ID are supplied'
   expect(db.getMessageById(selected.id)?.read).toBe(0)
 })
 
+it.each([null, 'different-pane'])(
+  'refuses a hosted caller whose mailbox routing pane is %s',
+  async (routingPane) => {
+    const { db, runtime, activeRunId } = harness.setup()
+    const selected = db.insertMessage({
+      from: 'term_sender',
+      to: `run:${activeRunId}`,
+      subject: 'leave unread'
+    })
+    const hostedAuthority = runtime.getOrchestrationDispatchAuthority('term_coord')
+    vi.mocked(runtime.getOrchestrationDispatchAuthority).mockReturnValue(hostedAuthority)
+    vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(routingPane)
+    const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+    await expect(
+      dispatcher.dispatch({
+        id: 'rpc_unverified_routing_pane',
+        authToken: 'test',
+        method: 'orchestration.ackMessages',
+        params: {
+          terminal: 'term_coord',
+          terminalPaneKey: harness.coordinatorPaneKey,
+          ackIds: [selected.id]
+        },
+        orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+        orchestrationRequestId: 'unverified_routing_pane_request'
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'consumer_fenced', data: { effectsApplied: false } }
+    })
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+  }
+)
+
 it.each(['worker_done', 'heartbeat'] as const)(
   'refuses a mixed selection containing a %s lifecycle report without taking mail',
   async (type) => {
