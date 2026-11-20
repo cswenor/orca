@@ -297,7 +297,11 @@ it('rejects the wrong owning Run and keeps a receipt on the original Dispatch ge
     runId: dispatch.run_id,
     subject: 'selected status'
   })
-  const { id: wrongRunId } = db.createRun({ objective: 'unrelated Run' })
+  const { id: wrongRunId } = db.createRun({
+    objective: 'unrelated Run',
+    coordinatorHandle: null,
+    coordinatorPaneKey: null
+  })
   const wrongRun = db.insertMessage({
     from: 'term_coord',
     to: `dispatch:${dispatch.id}`,
