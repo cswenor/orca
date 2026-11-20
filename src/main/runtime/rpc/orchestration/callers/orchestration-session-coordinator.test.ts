@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { testOrcaSessionId } from '../../../../../shared/agent-session/identity/orca-session-address-test-fixture'
 import {
   mintStructuredWorkerHandle,
   mintStructuredWorkerPaneKey,
@@ -12,6 +13,7 @@ import {
   idOf,
   resultOf,
   SESSION_X,
+  sessionRecord,
   SESSION_Y,
   type SessionCallerHarness
 } from './session.test-fixture'
@@ -96,6 +98,60 @@ describe('a structured worker that names itself by session id', () => {
         expect.objectContaining({ subject: ADDRESS_Y })
       ])
     })
+  })
+
+  it('lets a cleared worker acknowledge its original Dispatch but fences a new lease', async () => {
+    const { run } = resultOf(
+      await h.dispatch(
+        orchestrationRequest(
+          'orchestration.runCreate',
+          { objective: 'delegate' },
+          { sessionId: SESSION_X }
+        )
+      )
+    )
+    const runId = idOf(run)
+    const dispatch = h.db.createDispatchContext({
+      taskId: h.db.createTask({ runId, spec: 'continue after clear' }).id,
+      assigneeHandle: handle,
+      assigneePaneKey: paneKey,
+      processIncarnation: structuredWorkerProcessIncarnation(workerSession),
+      creator: { kind: 'session', orcaSessionId: SESSION_X },
+      maxDepth: Number.MAX_SAFE_INTEGER
+    })
+    expect(dispatch.assignee_orca_session_id).toBe(workerSession)
+    const message = h.db.insertMessage({
+      from: 'term_sender',
+      to: `dispatch:${dispatch.id}`,
+      runId,
+      subject: 'status for continued worker'
+    })
+    const successor = testOrcaSessionId('a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d')
+    const original = h.records.get(workerSession)!
+    original.lease = { ...original.lease, claimStatus: 'released' }
+    original.conversationCommand = {
+      command: 'clear',
+      runtimeFence: original.lease.runtimeFence,
+      operationId: 'clear-worker',
+      callerKey: 'renderer',
+      phase: 'committed',
+      state: 'completed',
+      replacementSessionId: successor
+    }
+    const current = sessionRecord(successor)
+    h.records.set(successor, current)
+    const acknowledge = () =>
+      h.dispatch(
+        orchestrationRequest(
+          'orchestration.ackMessages',
+          { ackIds: [message.id] },
+          { sessionId: successor, requestId: 'clear-worker-ack' }
+        )
+      )
+    expect(resultOf(await acknowledge())).toMatchObject({ markedIds: [message.id] })
+    expect(resultOf(await acknowledge())).toMatchObject({ mutation: { replayed: true } })
+    current.lease = { ...current.lease, runtimeFence: current.lease.runtimeFence + 1 }
+    expect(await acknowledge()).toMatchObject({ ok: false, error: { code: 'request_mismatch' } })
   })
 
   it('preserves selected wake-up mail until a released session is running again', async () => {

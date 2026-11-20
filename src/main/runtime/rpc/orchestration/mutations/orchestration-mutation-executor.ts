@@ -18,18 +18,19 @@ import {
   replayStableCallerParams,
   shouldObserveCompletedMutation
 } from './orchestration-mutation-receipt'
-import { selectiveAckReceiptBinding } from './selective-ack-receipt-binding'
+import { runSelectiveAckMutation } from './selective-ack-receipt-binding'
+import { isSelectiveAckRequest } from '../callers/selective-ack-caller'
 
 export type DurableMutationInvocation = {
-  identity: {
+  identity?: {
     callerFingerprint: string
     requestId: string
     method: string
     payloadHash: string
   }
   recordReceipt: (receipt: unknown) => void
-  markWorkerDoneEffectFree: () => void
-  markEffectPossible: () => void
+  markWorkerDoneEffectFree?: () => void
+  markEffectPossible?: () => void
   replayedReceipt?: unknown
 }
 
@@ -60,6 +61,16 @@ export class OrchestrationMutationExecutor {
     /** The resolved caller; its identity joins the payload so another caller cannot replay it. */
     caller?: OrchestrationEntryCaller
   ): Promise<unknown> {
+    if (isSelectiveAckRequest(request)) {
+      return await runSelectiveAckMutation(
+        this.runtime,
+        request,
+        params,
+        invoke,
+        callerFingerprintOverride,
+        caller
+      )
+    }
     const requestId = request.orchestrationRequestId
     if (!requestId || !isDurableMutation(request.method, params)) {
       return await invoke()
@@ -67,12 +78,9 @@ export class OrchestrationMutationExecutor {
     const callerFingerprint =
       callerFingerprintOverride ?? this.getLocalAuthenticatedCallerFingerprint()
     const stableParams = replayStableCallerParams(this.runtime, params, caller, request.method)
-    const ackBinding = selectiveAckReceiptBinding(this.runtime, request, params, caller)
-    const ackBindingHash = ackBinding && hashCanonical(ackBinding)
     const basePayloadHash = hashCanonical({
       method: request.method,
-      params: stableParams,
-      ...(ackBindingHash ? { ackBindingHash } : {})
+      params: stableParams
     })
     const key = `${callerFingerprint}:${requestId}`
     const db = this.runtime.getOrchestrationDb()
@@ -229,15 +237,6 @@ export class OrchestrationMutationExecutor {
     }
     let effectPossible = false
     const active = Promise.resolve().then(() => {
-      if (
-        ackBindingHash &&
-        hashCanonical(selectiveAckReceiptBinding(this.runtime, request, params, caller)) !==
-          ackBindingHash
-      ) {
-        throw new OrchestrationError('consumer_fenced', 'The selective mailbox caller changed.', {
-          effectsApplied: false
-        })
-      }
       return invoke({
         identity,
         recordReceipt,

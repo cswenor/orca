@@ -101,7 +101,7 @@ export async function checkRunPendingMail(args: {
                   assertSelectiveAckDispatchProcess(
                     current,
                     runtime.getTerminalProcessIncarnation(handle),
-                    args.reader?.revalidateAckLease?.()
+                    args.reader?.revalidateAckLease?.() ? args.reader.orcaSessionId : null
                   )
                 }
               }

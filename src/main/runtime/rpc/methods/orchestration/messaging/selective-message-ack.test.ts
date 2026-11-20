@@ -105,7 +105,7 @@ it('keeps a bound Run selection separate from explicit unbound direct mail', asy
   })
 })
 
-it('refuses a stale terminal and saved pane without a mutation ID', async () => {
+it('refuses a stale terminal even when a saved pane and request ID are supplied', async () => {
   const { db, runtime, activeRunId } = harness.setup()
   const selected = db.insertMessage({
     from: 'term_sender',
@@ -125,7 +125,8 @@ it('refuses a stale terminal and saved pane without a mutation ID', async () => 
         terminalPaneKey: harness.coordinatorPaneKey,
         ackIds: [selected.id]
       },
-      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+      orchestrationRequestId: 'stale_terminal_request'
     })
   ).resolves.toMatchObject({ ok: false, error: { code: 'consumer_fenced' } })
   expect(db.getMessageById(selected.id)?.read).toBe(0)
@@ -203,6 +204,83 @@ it.each([undefined, 'pty:prior'])(
       processIncarnation: 'runtime_test:term_worker:1'
     })
     await expect(check()).resolves.toMatchObject({ markedIds: [selected.id] })
+  }
+)
+
+it.each(['orchestration.ackMessages', 'orchestration.check'])(
+  'only writes read state and a receipt when %s accepts the selection',
+  async (method) => {
+    const { db, runtime } = harness.setup(false)
+    const selected = db.insertMessage({ from: 'sender', to: 'term_coord', subject: 'unread' })
+    db.db
+      .prepare(
+        `UPDATE messages
+         SET pointer_enter_pending = 1, pointer_pty_id = 'pty-original',
+             pointer_process_incarnation = 'process-original'
+         WHERE id = ?`
+      )
+      .run(selected.id)
+    const original = db.getMessageById(selected.id)
+    const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+    const request = {
+      id: 'rpc_ack',
+      authToken: 'test',
+      method,
+      params: { terminal: 'term_coord', ackIds: [selected.id] },
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION
+    }
+    await expect(dispatcher.dispatch(request)).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_argument' }
+    })
+    const ack = {
+      ...request,
+      orchestrationRequestId: 'selected-request',
+      orchestrationCompatibilityEvidence: {
+        terminalHandle: 'term_coord',
+        paneKey: harness.coordinatorPaneKey
+      }
+    }
+    await expect(
+      dispatcher.dispatch({
+        ...ack,
+        orchestrationCompatibilityEvidence: { terminalHandle: 'term_other' }
+      })
+    ).resolves.toMatchObject({ ok: false, error: { code: 'consumer_fenced' } })
+    expect(db.readLocalMutationCallerFingerprint()).toBeUndefined()
+    const fingerprint = db.getOrCreateLocalMutationCallerFingerprint()
+    db.db
+      .prepare(
+        `INSERT INTO mutation_receipts
+         (caller_fingerprint, request_id, method, payload_hash, state, receipt, updated_at)
+         VALUES (?, 'expired-request', 'orchestration.send', 'payload', 'completed', '{}', '2000-01-01')`
+      )
+      .run(fingerprint)
+    const expired = db.getMutationReceipt(fingerprint, 'expired-request')
+    await expect(
+      dispatcher.dispatch({
+        ...ack,
+        params: { ...ack.params, ackIds: [selected.id, 'msg_missing'] }
+      })
+    ).resolves.toMatchObject({ ok: false, error: { code: 'invalid_argument' } })
+    expect(db.getMutationReceipt(fingerprint, 'expired-request')).toEqual(expired)
+    expect(db.getMutationReceipt(fingerprint, ack.orchestrationRequestId)).toBeUndefined()
+    expect(db.getMessageById(selected.id)).toEqual(original)
+
+    const results = await Promise.all([dispatcher.dispatch(ack), dispatcher.dispatch(ack)])
+    for (const replayed of [true, false]) {
+      expect(results).toContainEqual(
+        expect.objectContaining({
+          ok: true,
+          result: expect.objectContaining({
+            markedIds: [selected.id],
+            mutation: expect.objectContaining({ replayed })
+          })
+        })
+      )
+    }
+    expect(db.getMessageById(selected.id)).toEqual({ ...original, read: 1 })
+    expect(db.getMutationReceipt(fingerprint, ack.orchestrationRequestId)?.state).toBe('completed')
   }
 )
 

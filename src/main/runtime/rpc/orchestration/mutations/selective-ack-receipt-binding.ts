@@ -12,24 +12,92 @@ import {
   orchestrationCallerIdentity,
   resolveRunScope
 } from '../../methods/orchestration/runs/run-scope'
+import type { DurableMutationInvocation } from './orchestration-mutation-executor'
+import {
+  attachMutationReceipt,
+  hashCanonical,
+  replayStableCallerParams
+} from './orchestration-mutation-receipt'
 
-/** Read only: receipt replay happens before the mailbox handler and must not route or take mail. */
-export function selectiveAckReceiptBinding(
+export async function runSelectiveAckMutation(
+  runtime: OrcaRuntimeService,
+  request: RpcRequest,
+  params: unknown,
+  invoke: (mutation: DurableMutationInvocation) => unknown,
+  callerFingerprint: string | undefined,
+  caller: OrchestrationEntryCaller | undefined
+): Promise<unknown> {
+  const requestId = request.orchestrationRequestId
+  if (!requestId) {
+    throw new OrchestrationError(
+      'invalid_argument',
+      'Selective acknowledgment requires a request ID.',
+      { effectsApplied: false }
+    )
+  }
+  const readBinding = () =>
+    hashCanonical(selectiveAckReceiptBinding(runtime, request, params, caller))
+  const binding = readBinding()
+  const { method } = request
+  const payloadHash = hashCanonical({
+    method,
+    params: replayStableCallerParams(runtime, params, caller, method),
+    binding
+  })
+  const db = runtime.getOrchestrationDb()
+  const fingerprint = callerFingerprint ?? db.readLocalMutationCallerFingerprint()
+  const existing = fingerprint ? db.getMutationReceipt(fingerprint, requestId) : undefined
+  if (existing) {
+    if (existing.method !== method || existing.payload_hash !== payloadHash) {
+      throw new OrchestrationError(
+        'request_mismatch',
+        `Mutation request ${requestId} was already used with different input.`
+      )
+    }
+    if (existing.state !== 'completed' || existing.receipt === null) {
+      throw new OrchestrationError(
+        'operation_unknown',
+        `Mutation ${requestId} has no completed receipt.`
+      )
+    }
+    return attachMutationReceipt(JSON.parse(existing.receipt), requestId, true)
+  }
+  const result = await invoke({
+    recordReceipt: (receipt) => {
+      if (readBinding() !== binding) {
+        throw new OrchestrationError('consumer_fenced', 'The selective mailbox caller changed.', {
+          effectsApplied: false
+        })
+      }
+      db.insertCompletedMutationReceipt({
+        callerFingerprint: fingerprint,
+        requestId,
+        method,
+        payloadHash,
+        receipt: JSON.stringify(attachMutationReceipt(receipt, requestId, false))
+      })
+    }
+  })
+  return attachMutationReceipt(result, requestId, false)
+}
+
+/** Read only: receipt replay must not route or take mail. */
+function selectiveAckReceiptBinding(
   runtime: OrcaRuntimeService,
   request: RpcRequest,
   params: unknown,
   caller: OrchestrationEntryCaller | undefined
 ) {
-  if (request.method !== 'orchestration.ackMessages' && request.method !== 'orchestration.check') {
-    return undefined
-  }
   if (
     !params ||
     typeof params !== 'object' ||
     !('ackIds' in params) ||
     !Array.isArray(params.ackIds)
   ) {
-    return undefined
+    throw new OrchestrationError(
+      'invalid_argument',
+      'Selective acknowledgment requires message IDs.'
+    )
   }
   const ackIds = params.ackIds.filter((id): id is string => typeof id === 'string')
   const handle =
@@ -41,9 +109,24 @@ export function selectiveAckReceiptBinding(
   const run = 'run' in params && typeof params.run === 'string' ? params.run : undefined
   const livePane = runtime.getTerminalPaneKey(handle)
   const process = runtime.getTerminalProcessIncarnation(handle)
+  const evidence = request.orchestrationCompatibilityEvidence
+  if (evidence?.launchToken || evidence?.host) {
+    const proof = runtime.verifyOrchestrationCompatibilityCaller(evidence, {
+      currentRuntimeLaunchSufficient: true
+    })
+    if (!proof || proof.terminalHandle !== handle || proof.processIncarnation !== process) {
+      throw terminalEvidenceMismatch()
+    }
+  } else if (
+    (evidence?.terminalHandle || evidence?.paneKey) &&
+    (evidence.terminalHandle !== handle || !evidence.paneKey || evidence.paneKey !== livePane)
+  ) {
+    // An interactive Orca shell carries its handle and pane without a provider launch token.
+    throw terminalEvidenceMismatch()
+  }
   const lease = assertSelectiveAckCaller(caller, runtime, handle, process)
   if (run === ORCHESTRATION_UNBOUND_RUN_ID) {
-    return { process, lease, direct: handle }
+    return { process, lease, livePane, direct: handle }
   }
   const db = runtime.getOrchestrationDb()
   const identity = orchestrationCallerIdentity(runtime, {
@@ -70,7 +153,7 @@ export function selectiveAckReceiptBinding(
       const mailbox = `dispatch:${dispatch.id}`
       for (const row of getMessagesByIds(db, ackIds).values()) {
         if (row.to_handle === mailbox) {
-          assertSelectiveAckDispatchProcess(dispatch, process, lease)
+          assertSelectiveAckDispatchProcess(dispatch, process, lease ? caller?.orcaSessionId : null)
           residual = [dispatch.id, dispatch.consumer_generation]
           break
         }
@@ -79,6 +162,7 @@ export function selectiveAckReceiptBinding(
     return {
       process,
       lease,
+      livePane,
       run: [currentRun.id, currentRun.consumer_generation],
       dispatch: residual
     }
@@ -86,7 +170,7 @@ export function selectiveAckReceiptBinding(
   const attachment =
     !dispatch && paneKey ? db.findActiveRemoteAttachmentForPane(paneKey) : undefined
   if (dispatch) {
-    assertSelectiveAckDispatchProcess(dispatch, process, lease)
+    assertSelectiveAckDispatchProcess(dispatch, process, lease ? caller?.orcaSessionId : null)
   }
   if (
     attachment &&
@@ -104,6 +188,7 @@ export function selectiveAckReceiptBinding(
   return {
     process,
     lease,
+    livePane,
     dispatch: dispatch
       ? [dispatch.id, dispatch.run_id, dispatch.consumer_generation]
       : attachment
@@ -111,4 +196,12 @@ export function selectiveAckReceiptBinding(
         : undefined,
     direct: dispatch || attachment ? undefined : handle
   }
+}
+
+function terminalEvidenceMismatch(): OrchestrationError {
+  return new OrchestrationError(
+    'consumer_fenced',
+    'Terminal evidence does not match this mailbox caller.',
+    { effectsApplied: false }
+  )
 }

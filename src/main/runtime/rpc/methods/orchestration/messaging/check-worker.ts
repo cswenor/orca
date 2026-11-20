@@ -65,7 +65,11 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
       if (params.ackIds) {
         const process = runtime.getTerminalProcessIncarnation(handle)
         const lease = args.reader?.revalidateAckLease?.()
-        assertSelectiveAckDispatchProcess(current, process, lease)
+        assertSelectiveAckDispatchProcess(
+          current,
+          process,
+          lease ? args.reader?.orcaSessionId : null
+        )
       }
       return true
     }

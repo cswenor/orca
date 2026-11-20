@@ -51,13 +51,14 @@ export function assertSelectiveAckCaller(
 export function assertSelectiveAckDispatchProcess(
   dispatch: Pick<DispatchContextRow, 'process_incarnation' | 'assignee_orca_session_id'>,
   process: string | null,
-  lease?: readonly [string, number]
+  verifiedAssignee: string | null | undefined
 ): void {
   const liveTerminal =
     process !== null &&
     dispatch.process_incarnation === process &&
     !sessionIdFromStructuredWorkerIncarnation(process)
-  const liveAssignee = lease !== undefined && lease[0] === dispatch.assignee_orca_session_id
+  const liveAssignee =
+    verifiedAssignee != null && verifiedAssignee === dispatch.assignee_orca_session_id
   if (!liveTerminal && !liveAssignee) {
     throw new OrchestrationError(
       'consumer_fenced',

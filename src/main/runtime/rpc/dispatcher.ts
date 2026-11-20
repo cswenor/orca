@@ -22,6 +22,7 @@ import {
   type DurableMutationInvocation,
   type OrchestrationMutationExecutor
 } from './orchestration/mutations/orchestration-mutation-executor'
+import { isSelectiveAckRequest } from './orchestration/callers/selective-ack-caller'
 import { OrchestrationLegacyCompatibility } from './orchestration/compatibility/orchestration-legacy-compatibility'
 import type { RpcDispatchStreamingOptions } from './dispatch/dispatcher-stream-options'
 import { mapDispatcherError } from './responses/dispatcher-error-response'
@@ -263,6 +264,7 @@ export class RpcDispatcher {
     const fallbackCallerFingerprint =
       context.authenticatedCallerFingerprint ??
       (!legacyCoordinator &&
+      !isSelectiveAckRequest(request) &&
       (request.method.startsWith('orchestration.federation') ||
         (!!request.orchestrationRequestId && isDurableMutation(request.method, effectiveParams)))
         ? orchestrationMutations.getLocalAuthenticatedCallerFingerprint()
@@ -276,8 +278,7 @@ export class RpcDispatcher {
         () =>
           method.handler(effectiveParams, {
             ...context,
-            authenticatedCallerFingerprint:
-              mutation?.identity.callerFingerprint ?? callerFingerprint,
+            authenticatedCallerFingerprint: callerFingerprint,
             recordMutationReceipt: mutation?.recordReceipt,
             markWorkerDoneMutationEffectFree: mutation?.markWorkerDoneEffectFree,
             markMutationEffectPossible: mutation?.markEffectPossible,

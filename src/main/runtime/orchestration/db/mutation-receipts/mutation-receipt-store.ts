@@ -5,32 +5,66 @@ import { ensureMutationReceiptCapacity } from './mutation-receipt-capacity'
 import type { OrchestrationDb } from '../orchestration-db'
 import { MUTATION_RECEIPT_COLUMN_LIST } from '../row-column-lists'
 
-export function getOrCreateLocalMutationCallerFingerprint(this: OrchestrationDb): string {
+const LOCAL_TRANSPORT = 'local_authenticated_transport'
+
+export function readLocalMutationCallerFingerprint(this: OrchestrationDb): string | undefined {
   if (this.localMutationCallerFingerprint) {
     return this.localMutationCallerFingerprint
   }
-  const transport = 'local_authenticated_transport'
-  const existing = this.db
+  const fingerprint = this.db
     .prepare('SELECT caller_fingerprint FROM mutation_caller_identities WHERE transport = ?')
-    .get(transport) as { caller_fingerprint: string } | undefined
+    .get(LOCAL_TRANSPORT)?.caller_fingerprint
+  return typeof fingerprint === 'string' ? fingerprint : undefined
+}
+
+function ensureStoredLocalCaller(db: OrchestrationDb): string {
+  const existing = db.readLocalMutationCallerFingerprint()
   if (existing) {
-    this.localMutationCallerFingerprint = existing.caller_fingerprint
-    return this.localMutationCallerFingerprint
+    return existing
   }
-  this.db
+  db.db
     .prepare(
       `INSERT OR IGNORE INTO mutation_caller_identities (transport, caller_fingerprint)
        VALUES (?, ?)`
     )
-    .run(transport, randomBytes(32).toString('hex'))
-  const created = this.db
-    .prepare('SELECT caller_fingerprint FROM mutation_caller_identities WHERE transport = ?')
-    .get(transport) as { caller_fingerprint: string } | undefined
+    .run(LOCAL_TRANSPORT, randomBytes(32).toString('hex'))
+  const created = db.readLocalMutationCallerFingerprint()
   if (!created) {
     throw new Error('Failed to create the local orchestration mutation caller identity.')
   }
-  this.localMutationCallerFingerprint = created.caller_fingerprint
-  return this.localMutationCallerFingerprint
+  return created
+}
+
+export function getOrCreateLocalMutationCallerFingerprint(this: OrchestrationDb): string {
+  return (this.localMutationCallerFingerprint ??= ensureStoredLocalCaller(this))
+}
+
+/** The operation's transaction owns capacity and the completed row together with its effects. */
+export function insertCompletedMutationReceipt(
+  this: OrchestrationDb,
+  params: {
+    callerFingerprint?: string
+    requestId: string
+    method: string
+    payloadHash: string
+    receipt: string
+  }
+): void {
+  const caller = params.callerFingerprint ?? ensureStoredLocalCaller(this)
+  if (this.getMutationReceipt(caller, params.requestId)) {
+    throw new OrchestrationError(
+      'request_mismatch',
+      `Mutation request ${params.requestId} already has a durable receipt.`
+    )
+  }
+  ensureMutationReceiptCapacity(this.db)
+  this.db
+    .prepare(
+      `INSERT INTO mutation_receipts (
+         caller_fingerprint, request_id, method, payload_hash, state, receipt
+       ) VALUES (?, ?, ?, ?, 'completed', ?)`
+    )
+    .run(caller, params.requestId, params.method, params.payloadHash, params.receipt)
 }
 
 export function beginMutationReceipt(
@@ -200,6 +234,8 @@ export function getMutationReceipt(
 
 export type MutationReceiptStoreMethods = {
   getOrCreateLocalMutationCallerFingerprint: typeof getOrCreateLocalMutationCallerFingerprint
+  readLocalMutationCallerFingerprint: typeof readLocalMutationCallerFingerprint
+  insertCompletedMutationReceipt: typeof insertCompletedMutationReceipt
   beginMutationReceipt: typeof beginMutationReceipt
   completeMutationReceipt: typeof completeMutationReceipt
   checkpointPendingMutationReceipt: typeof checkpointPendingMutationReceipt
@@ -212,6 +248,8 @@ export type MutationReceiptStoreMethods = {
 export function attachMutationReceiptStore(ctor: { prototype: object }): void {
   Object.assign(ctor.prototype, {
     getOrCreateLocalMutationCallerFingerprint,
+    readLocalMutationCallerFingerprint,
+    insertCompletedMutationReceipt,
     beginMutationReceipt,
     completeMutationReceipt,
     checkpointPendingMutationReceipt,

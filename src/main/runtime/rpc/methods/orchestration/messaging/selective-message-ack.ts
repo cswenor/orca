@@ -88,7 +88,11 @@ export function acknowledgeSelectedMessages(args: {
         { effectsApplied: false }
       )
     }
-    db.markAsRead(markedIds)
+    if (markedIds.length) {
+      db.db
+        .prepare('UPDATE messages SET read = 1 WHERE id IN (SELECT value FROM json_each(?))')
+        .run(JSON.stringify(markedIds))
+    }
     const marked = new Set(markedIds)
     const response = {
       ...args.mailboxIdentity,
