@@ -62,11 +62,17 @@ export const CheckParams = z
     }
   })
 
+const AckScopeString = z
+  .string()
+  .min(1)
+  .refine((value) => value === value.trim())
+  .optional()
+
 // A distinct method is required: older runtimes strip unknown fields from check.
 export const AckMessagesParams = z.strictObject({
-  terminal: OptionalString,
-  terminalPaneKey: OptionalString,
-  run: OptionalString,
+  terminal: AckScopeString,
+  terminalPaneKey: AckScopeString,
+  run: AckScopeString,
   ackIds: z.array(z.string().trim().min(1)).min(1)
 })
 

@@ -1,4 +1,7 @@
-import { ORCA_AGENT_SESSION_ID_ENV } from '../../../../shared/agent-session/lifecycle/launch/agent-session-caller-env'
+import {
+  ORCA_AGENT_SESSION_ID_ENV,
+  ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV
+} from '../../../../shared/agent-session/lifecycle/launch/agent-session-caller-env'
 import { ORCA_STRUCTURED_SESSION_ENV } from '../../../../shared/agent-launch/environment/structured-session-marker'
 import {
   ORCA_SCRUB_SAFE_LAUNCH_ENV,
@@ -29,5 +32,6 @@ export const AGENT_PANE_HOOK_ENV_KEYS = [
 // Inherited structured-session IDs would make every pane claim the parent orchestration caller.
 export const ORCA_AGENT_SESSION_CALLER_ENV_KEYS = [
   ORCA_AGENT_SESSION_ID_ENV,
+  ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV,
   ORCA_STRUCTURED_SESSION_ENV
 ] as const

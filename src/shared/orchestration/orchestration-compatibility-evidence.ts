@@ -1,3 +1,5 @@
+import { ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV } from '../agent-session/lifecycle/launch/agent-session-caller-env'
+
 const MAX_EVIDENCE_FIELD_LENGTH = 4_096
 
 export const ORCHESTRATION_COMPATIBILITY_HOST_KIND_ENV =
@@ -28,6 +30,7 @@ export type OrchestrationCompatibilityEvidence = {
   host?: OrchestrationCompatibilityHostStamp
   /** Injected Orca session identity is authoritative when present; dispatch resolves it and validates any declared handle against it. */
   agentSessionId?: string
+  agentSessionMailboxLease?: string
 }
 
 const SECRET_KEYS = new Set([
@@ -37,6 +40,8 @@ const SECRET_KEYS = new Set([
   'compatibilityEvidence',
   'orchestrationCompatibilityEvidence',
   'ORCA_AGENT_LAUNCH_TOKEN',
+  'agentSessionMailboxLease',
+  ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV,
   ORCHESTRATION_COMPATIBILITY_HOST_INCARNATION_ENV,
   ORCHESTRATION_COMPATIBILITY_ATTACHMENT_ENV
 ])

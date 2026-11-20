@@ -7,6 +7,9 @@ export const ORCA_AGENT_SESSION_ID_ENV = 'ORCA_AGENT_SESSION_ID'
 /** The reservation token distinguishes its live child from a process that reused the PID. */
 export const ORCA_AGENT_SESSION_SPAWN_TOKEN_ENV = 'ORCA_AGENT_SESSION_SPAWN_TOKEN'
 
+/** Derived proof of the originating child lease for selective mailbox writes. */
+export const ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV = 'ORCA_AGENT_SESSION_MAILBOX_LEASE'
+
 /** A bot run's key to Orca's bot tool relay; the host names the calling bot by it, never by the session id. */
 export const BOT_TOOLS_TOKEN_ENV = 'ORCA_BOT_TOOLS_TOKEN'
 

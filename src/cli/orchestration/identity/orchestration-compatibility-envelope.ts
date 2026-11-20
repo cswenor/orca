@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { readInjectedAgentSessionId } from '../../../shared/agent-session/lifecycle/launch/agent-session-caller-env'
+import {
+  ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV,
+  readInjectedAgentSessionId
+} from '../../../shared/agent-session/lifecycle/launch/agent-session-caller-env'
 import { readOrchestrationCompatibilityEvidence } from '../../../shared/orchestration/orchestration-compatibility-evidence'
 import { BOT_ITEM_WRITE_METHOD_NAMES } from '../../../shared/bots/bot-items'
 import { CONNECTOR_POST_METHOD_NAMES } from '../../../shared/connector-action-contract'
@@ -51,6 +54,7 @@ export class OrchestrationRequestEvidence {
   // A chat's session id means nothing on another server, so reads there go like a shell's.
   private readonly remoteRead: RuntimeOrchestrationEnvelope
   private readonly chatCaller: RuntimeOrchestrationEnvelope['orchestrationCompatibilityEvidence']
+  private readonly mailboxLease: string | undefined
 
   constructor(env: NodeJS.ProcessEnv) {
     this.orchestration = createOrchestrationCompatibilityEnvelope(env)
@@ -61,6 +65,7 @@ export class OrchestrationRequestEvidence {
       orchestrationCompatibilityEvidence: Object.keys(shell).length > 0 ? shell : undefined
     }
     this.chatCaller = createChatCallerEvidence(env)
+    this.mailboxLease = env[ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV]
   }
 
   envelopeFor(
@@ -69,9 +74,16 @@ export class OrchestrationRequestEvidence {
   ): RuntimeOrchestrationEnvelope {
     if (method.startsWith('orchestration.')) {
       const base = request.remote && !request.mutation ? this.remoteRead : this.orchestration
+      const evidence = base.orchestrationCompatibilityEvidence
+      const mailboxLease =
+        method === 'orchestration.ackMessages' && !request.remote ? this.mailboxLease : undefined
       return {
         ...base,
-        compatibilityInvocationId: request.requestId ?? base.compatibilityInvocationId
+        compatibilityInvocationId: request.requestId ?? base.compatibilityInvocationId,
+        orchestrationCompatibilityEvidence:
+          evidence?.agentSessionId && mailboxLease
+            ? { ...evidence, agentSessionMailboxLease: mailboxLease }
+            : evidence
       }
     }
     return namesChatCaller(method) && !request.remote && this.chatCaller

@@ -30,6 +30,7 @@ import {
 import { lookupOrcaAgentSession } from '../../../orchestration/mailbox/routing/structured-session-mail-address'
 import { conversationRecordReader } from '../../../orchestration/addressing/session-lineage/structured-session-lineage'
 import type { AgentSessionRecordStore } from '../../../agent-session/records/agent-session-record-store'
+import { matchesStructuredMailboxLease } from '../../../agent-session/ownership/structured-mailbox-lease-proof'
 import { getStructuredAgentSessionHost } from '../../../../native-chat/agent-session-wire/host/structured-agent-session-registry'
 import { structuredWorkerHostScope } from '../../../orchestration/terminal-authority/structured-sessions/structured-worker-identity'
 import { BOT_ITEM_WRITE_METHOD_NAMES } from '../../../../../shared/bots/bot-items'
@@ -113,7 +114,7 @@ export async function resolveOrchestrationSessionCaller(
       request: bindDeclaredSessionAddress(runtime.getOrchestrationDb(), request, callerField)
     }
   }
-  const claimed: unknown = evidence?.agentSessionId
+  const claimed: unknown = evidence.agentSessionId
   if (route?.pairedDeviceId !== undefined) {
     throw hostBoundary(
       'This request reached Orca from a paired client, and an Orca session ID identifies a caller only on the host that runs that session.'
@@ -128,16 +129,25 @@ export async function resolveOrchestrationSessionCaller(
   const db = runtime.getOrchestrationDb()
   const selectiveAck = isSelectiveAckRequest(request)
   const store = selectiveAck ? getStructuredAgentSessionHost()?.deps.store : undefined
-  const runtimeFence = record.lease.runtimeFence
+  const { runtimeFence, ownerProcess } = record.lease
+  const spawnToken = ownerProcess?.spawnToken
+  const originatingOwner =
+    selectiveAck && matchesStructuredMailboxLease(evidence.agentSessionMailboxLease, spawnToken)
   const revalidateAckLease = () => {
     const current =
       store && store === getStructuredAgentSessionHost()?.deps.store
         ? store.requireWritableRecord(record.sessionId)
         : undefined
-    if (!current || current.lease.runtimeFence !== runtimeFence) {
+    // A claimed session ID by itself must never borrow the current owner's lease.
+    if (
+      !current ||
+      current.lease.runtimeFence !== runtimeFence ||
+      !originatingOwner ||
+      current.lease.ownerProcess?.spawnToken !== spawnToken
+    ) {
       throw new OrchestrationError(
         'consumer_fenced',
-        'The mailbox caller lease changed.',
+        'Selective acknowledgment requires the originating live mailbox lease.',
         NO_EFFECTS
       )
     }

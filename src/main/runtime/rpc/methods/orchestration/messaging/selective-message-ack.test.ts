@@ -105,6 +105,38 @@ it('keeps a bound Run selection separate from explicit unbound direct mail', asy
   })
 })
 
+it.each([{ run: '' }, { run: ' ' }, { run: null }, { run: 17 }, { run: {} }, { run: [] }])(
+  'refuses malformed explicit Run scope $run before marking any mail',
+  async (scope) => {
+    const { db, runtime, activeRunId } = harness.setup()
+    const selected = db.insertMessage({
+      from: 'term_sender',
+      to: `run:${activeRunId}`,
+      runId: activeRunId,
+      subject: 'leave unread'
+    })
+    const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+    const dispatch = (scope: { run?: unknown }) =>
+      dispatcher.dispatch({
+        id: 'rpc_selective_scope',
+        authToken: 'test',
+        method: 'orchestration.ackMessages',
+        params: { terminal: 'term_coord', ackIds: [selected.id], ...scope },
+        orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+        orchestrationRequestId: 'selective_scope_request'
+      })
+    await expect(dispatch(scope)).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_argument' }
+    })
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+    await expect(dispatch({})).resolves.toMatchObject({
+      ok: true,
+      result: { markedIds: [selected.id], mutation: { replayed: false } }
+    })
+  }
+)
+
 it('refuses a stale terminal even when a saved pane and request ID are supplied', async () => {
   const { db, runtime, activeRunId } = harness.setup()
   const selected = db.insertMessage({
