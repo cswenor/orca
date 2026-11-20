@@ -103,13 +103,10 @@ describe('orchestration.check on a re-attached Dispatch', () => {
     vi.mocked(runtime.getTerminalProcessIncarnation).mockReturnValue('runtime:pty-a:1')
     const message = db.getUnreadMessages(`dispatch:${dispatchId}`)[0]!
     const identity = db.getActiveDispatchForIdentity.bind(db)
-    let resolved = 0
-    vi.spyOn(db, 'getActiveDispatchForIdentity').mockImplementation((handle, paneKey) => {
-      resolved += 1
-      if (resolved === 2) {
-        remintOnSamePane(dispatchId)
-      }
-      return identity(handle, paneKey)
+    vi.spyOn(db, 'getActiveDispatchForIdentity').mockImplementationOnce((handle, paneKey) => {
+      const prior = identity(handle, paneKey)
+      remintOnSamePane(dispatchId)
+      return prior
     })
     const acknowledge = () =>
       h.call(
