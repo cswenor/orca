@@ -80,6 +80,49 @@ describe('mail checks reconcile the currently owned source attempts', () => {
     expect(queued[0]).toContain('unselected mail')
   })
 
+  it('leaves selected mail unread if its caller releases the lease during custody', async ({
+    onTestFinished
+  }) => {
+    await openChat(COORDINATOR)
+    await busyChat(PEER_CHAT)
+    await coordinatorRunAndTask()
+    const address = formatOrcaSessionAddress(testOrcaSessionId(PEER_CHAT))
+    await call(
+      'orchestration.send',
+      { to: address, subject: 'wake-up mail' },
+      {
+        sessionId: COORDINATOR
+      }
+    )
+    await vi.waitFor(async () => expect(await queuedCardTexts(PEER_CHAT)).toHaveLength(1), WAIT)
+    const selected = db.getUnreadMessages(address)[0]!
+    const observed = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    onTestFinished(() => release.resolve())
+    holdMailRead(PEER_CHAT, async () => {
+      observed.resolve()
+      await release.promise
+    })
+    const acknowledging = dispatcher.dispatch(
+      request('orchestration.ackMessages', { ackIds: [selected.id] }, { sessionId: PEER_CHAT })
+    )
+    await observed.promise
+    const store = host.deps.store
+    const read = store.requireWritableRecord.bind(store)
+    vi.spyOn(store, 'requireWritableRecord').mockImplementation((id) => {
+      const record = read(id)
+      return id === PEER_CHAT
+        ? { ...record, lease: { ...record.lease, claimStatus: 'released' } }
+        : record
+    })
+    release.resolve()
+    expect(await acknowledging).toMatchObject({
+      ok: false,
+      error: { code: 'session_caller_not_live', data: { effectsApplied: false } }
+    })
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+  })
+
   it('keeps accepted whole direct mail consumed when its live lease renews during the source read', async ({
     onTestFinished
   }) => {

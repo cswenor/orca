@@ -87,6 +87,9 @@ export const ORCHESTRATION_CHECK_METHODS = [
       const livePane = runtime.getTerminalPaneKey(handle)
       const process = runtime.getTerminalProcessIncarnation(handle)
       const revalidateCaller = () => {
+        if (params.ackIds) {
+          reader?.revalidateAckLease?.()
+        }
         if (
           runtime.getTerminalPaneKey(handle) !== livePane ||
           runtime.getTerminalProcessIncarnation(handle) !== process
@@ -213,9 +216,10 @@ export const ORCHESTRATION_CHECK_METHODS = [
             revalidateConsumer: () => {
               revalidateCaller()
               if (
-                (!unboundOnly && db.getCurrentRunForCoordinator(caller)) ||
-                db.getActiveDispatchForIdentity(handle, paneKey) ||
-                (paneKey && db.findActiveRemoteAttachmentForPane(paneKey))
+                !(unboundOnly && params.ackIds) &&
+                ((!unboundOnly && db.getCurrentRunForCoordinator(caller)) ||
+                  db.getActiveDispatchForIdentity(handle, paneKey) ||
+                  (paneKey && db.findActiveRemoteAttachmentForPane(paneKey)))
               ) {
                 throw new OrchestrationError(
                   'consumer_fenced',

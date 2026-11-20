@@ -23,6 +23,8 @@ export type OrchestrationSessionCaller = OrchestrationCallerIdentity &
     sessionId: OrcaSessionId
     /** Where the session runs, from its record; `worker-start --worktree current` places here. */
     workspaceId: string
+    /** Selective mailbox calls must stay on the verified live lease through commit and retry. */
+    revalidateAckLease?: () => readonly [recordId: string, runtimeFence: number]
   }>
 
 /** A paired Orca acting as the coordinator of its Run here, as its authenticated frame names it.

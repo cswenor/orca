@@ -28,13 +28,11 @@ An implicitly bound child Run can also acknowledge pre-bind Dispatch mail while
 it remains that Dispatch's current consumer, even with an outstanding Run delivery.
 A bound Run selection never includes the caller's own direct mail. To select
 only unbound direct mail, specify `--run run_unbound`.
-The response and its durable retry receipt retain the Run/Dispatch identity.
-Existing consumer/pane fencing still
-applies: reattachment rejects the replaced consumer's selection even on the same
-pane. Do not use this to discard mail the agent has not processed.
+`--retry-request` only replays for the original process or live chat lease and
+mailbox generation. If either changed, inspect the current mailbox again.
 Released agent sessions cannot acknowledge wake-up mail until they are running
-again.
+again. Do not use this to discard mail the agent has not processed.
 
 Do not combine `--ack-ids` with other read, acknowledgment, formatting or wait
 options. Both the CLI and the execution host need selective-ack support; older
-hosts are refused before consumption. This applies to remote/SSH hosts too.
+hosts and the legacy SSH bridge are refused before consumption.

@@ -152,6 +152,34 @@ function request(
 }
 
 describe('legacy compatibility after explicit takeover', () => {
+  it('refuses selective IDs without returning or consuming a legacy page', async () => {
+    const h = createHarness()
+    const unread = h.db.insertMessage({
+      runId: h.adoptedRunId,
+      from: COORDINATOR_HANDLE,
+      to: `dispatch:${h.dispatchId}`,
+      subject: 'legacy guidance',
+      deliveryContract: 'legacy_direct'
+    })
+    await expect(
+      h.dispatcher.dispatch(
+        request(
+          'orchestration.check',
+          { terminal: WORKER_HANDLE, ackIds: [unread.id] },
+          evidence('worker'),
+          'refuse-legacy-selection'
+        )
+      )
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: 'invalid_argument',
+        message: 'Selective acknowledgment is unavailable for legacy mailbox callers.'
+      }
+    })
+    expect(h.db.getMessageById(unread.id)?.read).toBe(0)
+  })
+
   it('keeps an active legacy worker usable across authenticated takeover', async () => {
     const harness = createHarness()
     await expect(

@@ -125,10 +125,35 @@ export async function resolveOrchestrationSessionCaller(
   }
   const { sessionId, record } = await readActingSessionRecord(runtime, claimed, request.method)
   const db = runtime.getOrchestrationDb()
+  const params = request.params
+  const selectiveAck =
+    request.method === 'orchestration.ackMessages' ||
+    (request.method === 'orchestration.check' &&
+      params !== null &&
+      typeof params === 'object' &&
+      'ackIds' in params)
+  const store = selectiveAck ? getStructuredAgentSessionHost()?.deps.store : undefined
+  const runtimeFence = record.lease.runtimeFence
+  const revalidateAckLease = () => {
+    const current =
+      store && store === getStructuredAgentSessionHost()?.deps.store
+        ? store.requireWritableRecord(record.sessionId)
+        : undefined
+    if (!current || current.lease.runtimeFence !== runtimeFence) {
+      throw new OrchestrationError(
+        'consumer_fenced',
+        'The mailbox caller lease changed.',
+        NO_EFFECTS
+      )
+    }
+    assertSessionCanAct(sessionId, current, request.method)
+    return [record.sessionId, runtimeFence] as const
+  }
   const caller: OrchestrationSessionCaller = Object.freeze({
     ...resolveOrcaSessionParty(sessionId, db),
     sessionId,
-    workspaceId: record.location.workspaceId
+    workspaceId: record.location.workspaceId,
+    ...(selectiveAck ? { revalidateAckLease } : {})
   })
   return {
     request: {

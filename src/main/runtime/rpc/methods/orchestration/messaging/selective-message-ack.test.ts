@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createRootDispatch } from '../../../../orchestration/db/root-dispatch-test-fixture'
 import { createOrchestrationRpcHarness } from '../rpc-test-harness'
+import { RpcDispatcher } from '../../../dispatcher'
+import { ORCHESTRATION_METHODS } from '../orchestration'
+import { ORCHESTRATION_CONTRACT_VERSION } from '../../../../../../shared/orchestration/orchestration-runtime-capabilities'
 
 const harness = createOrchestrationRpcHarness()
 afterEach(() => harness.cleanup())
@@ -96,6 +99,50 @@ it('keeps a bound Run selection separate from explicit unbound direct mail', asy
   expect(db.getMessageById('msg_unbound')?.read).toBe(0)
   await expect(acknowledge(['msg_unbound'], 'run_unbound')).resolves.toMatchObject({
     markedIds: ['msg_unbound']
+  })
+})
+
+it('replays only on the original process and implicit Run', async () => {
+  const { db, runtime, activeRunId } = harness.setup()
+  const selected = db.insertMessage({
+    from: 'term_sender',
+    to: `run:${activeRunId}`,
+    subject: 'selected status'
+  })
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+  let incarnation = 'pty:original'
+  vi.mocked(runtime.getTerminalProcessIncarnation).mockImplementation(() => incarnation)
+  const acknowledge = () =>
+    dispatcher.dispatch({
+      id: 'rpc_selected_ack',
+      authToken: 'test',
+      method: 'orchestration.ackMessages',
+      params: { terminal: 'term_coord', ackIds: [selected.id] },
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+      orchestrationRequestId: 'selected_ack_retry'
+    })
+  await expect(acknowledge()).resolves.toMatchObject({
+    ok: true,
+    result: { markedIds: [selected.id], mutation: { replayed: false } }
+  })
+  await expect(acknowledge()).resolves.toMatchObject({
+    ok: true,
+    result: { markedIds: [selected.id], mutation: { replayed: true } }
+  })
+  incarnation = 'pty:replacement'
+  await expect(acknowledge()).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'request_mismatch' }
+  })
+  incarnation = 'pty:original'
+  db.createRun({
+    objective: 'replacement Run',
+    coordinatorHandle: 'term_coord',
+    coordinatorPaneKey: harness.coordinatorPaneKey
+  })
+  await expect(acknowledge()).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'request_mismatch' }
   })
 })
 

@@ -33,7 +33,13 @@ export function parseLegacyRelayCliArgs(argv: readonly string[]): LegacyRelayCli
       flags.set(assignment, true)
     }
   }
-  return { command: commandPath.join(' '), flags }
+  const command = commandPath.join(' ')
+  if (command === 'orchestration check' && flags.has('ack-ids') && !flags.has('help')) {
+    throw new Error(
+      'Selective acknowledgment is unavailable through the legacy SSH bridge. Open a new terminal on this host.'
+    )
+  }
+  return { command, flags }
 }
 
 /** A valued flag the shell emptied parses as `true`; dropping it would change the command. */

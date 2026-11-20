@@ -18,6 +18,7 @@ import {
   replayStableCallerParams,
   shouldObserveCompletedMutation
 } from './orchestration-mutation-receipt'
+import { selectiveAckReceiptBinding } from './selective-ack-receipt-binding'
 
 export type DurableMutationInvocation = {
   identity: {
@@ -66,7 +67,13 @@ export class OrchestrationMutationExecutor {
     const callerFingerprint =
       callerFingerprintOverride ?? this.getLocalAuthenticatedCallerFingerprint()
     const stableParams = replayStableCallerParams(this.runtime, params, caller, request.method)
-    const basePayloadHash = hashCanonical({ method: request.method, params: stableParams })
+    const ackBinding = selectiveAckReceiptBinding(this.runtime, request, params, caller)
+    const ackBindingHash = ackBinding && hashCanonical(ackBinding)
+    const basePayloadHash = hashCanonical({
+      method: request.method,
+      params: stableParams,
+      ...(ackBindingHash ? { ackBindingHash } : {})
+    })
     const key = `${callerFingerprint}:${requestId}`
     const db = this.runtime.getOrchestrationDb()
     const isPromptMutation = isTerminalPromptMutation(request.method, params)
@@ -221,8 +228,17 @@ export class OrchestrationMutationExecutor {
       effectPossible = true
     }
     let effectPossible = false
-    const active = Promise.resolve().then(() =>
-      invoke({
+    const active = Promise.resolve().then(() => {
+      if (
+        ackBindingHash &&
+        hashCanonical(selectiveAckReceiptBinding(this.runtime, request, params, caller)) !==
+          ackBindingHash
+      ) {
+        throw new OrchestrationError('consumer_fenced', 'The selective mailbox caller changed.', {
+          effectsApplied: false
+        })
+      }
+      return invoke({
         identity,
         recordReceipt,
         markWorkerDoneEffectFree: () => {
@@ -235,7 +251,7 @@ export class OrchestrationMutationExecutor {
           effectPossible = true
         }
       })
-    )
+    })
     this.inFlight.set(key, { method: request.method, payloadHash, promise: active })
     try {
       const result = await active

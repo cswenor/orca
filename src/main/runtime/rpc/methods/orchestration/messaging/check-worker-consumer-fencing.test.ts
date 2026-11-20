@@ -123,6 +123,43 @@ describe('orchestration.check on a re-attached Dispatch', () => {
     await expect(acknowledge()).resolves.toMatchObject({ markedIds: [message.id] })
   })
 
+  it('explicit unbound selection takes direct mail without touching the attached Dispatch', async () => {
+    ;({ db, ctx } = h.setup(false))
+    const { id: runId } = db.createRun({
+      objective: 'attached worker',
+      coordinatorHandle: 'term_coord',
+      coordinatorPaneKey: h.coordinatorPaneKey
+    })
+    const task = db.createTask({ runId, spec: 'worker task' })
+    const dispatch = createRootDispatch(db, task.id, 'term_worker', PANE_A)
+    // Omit runId to model direct mail from an unbound sender.
+    const direct = db.insertMessage({
+      from: 'term_coord',
+      to: 'term_worker',
+      subject: 'unbound direct mail'
+    })
+    const dispatchMail = db.insertMessage({
+      from: 'term_coord',
+      to: `dispatch:${dispatch.id}`,
+      runId,
+      subject: 'leave this unread'
+    })
+
+    await expect(
+      h.call(
+        'orchestration.ackMessages',
+        {
+          terminal: 'term_worker',
+          terminalPaneKey: PANE_A,
+          run: 'run_unbound',
+          ackIds: [direct.id]
+        },
+        ctx
+      )
+    ).resolves.toMatchObject({ markedIds: [direct.id] })
+    expect(db.getMessageById(dispatchMail.id)?.read).toBe(0)
+  })
+
   it('fences a blocked --peek whose generation moved while it waited', async () => {
     const dispatchId = attachedDispatchWithMail()
     vi.spyOn(runtime, 'waitForMessage').mockImplementation(async () => {

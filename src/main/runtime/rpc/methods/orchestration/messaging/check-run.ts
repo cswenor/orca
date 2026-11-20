@@ -83,7 +83,7 @@ export async function checkRunMailbox(args: {
     args.revalidateCaller()
     revalidateLegacyCoordinator?.()
     const currentRun = resolveRunScope(runtime, {
-      runId: run.id,
+      runId: params.ackIds ? params.run : run.id,
       callerTerminalHandle: handle,
       callerPaneKey: paneKey,
       callerSession,
@@ -91,7 +91,7 @@ export async function checkRunMailbox(args: {
       legacyCoordinatorRunId,
       callerEvidence: orchestrationCompatibilityEvidence
     })
-    if (currentRun.consumer_generation !== generation) {
+    if (currentRun.id !== run.id || currentRun.consumer_generation !== generation) {
       throw new OrchestrationError(
         'consumer_fenced',
         'This mailbox consumer was replaced while routing pending mail.'
