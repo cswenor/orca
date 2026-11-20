@@ -4817,6 +4817,8 @@ const ORCHESTRATION_MESSAGING_AND_GATES_REFERENCE_MARKDOWN = [
   "Peer-Orca federation callers cannot selectively acknowledge mail without a",
   "local mailbox lease; paired clients addressing a live execution terminal are",
   "not subject to that limitation.",
+  "On the execution host, use selective acknowledgment from inside a token-launched",
+  "agent pane. From outside that pane, use an ordinary check instead.",
   "",
 ].join('\n')
 

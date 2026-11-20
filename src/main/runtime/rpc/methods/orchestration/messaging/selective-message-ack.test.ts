@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { afterEach, expect, it, vi } from 'vitest'
 import {
   createRootDispatch,
@@ -360,6 +361,64 @@ it('only writes read state and a receipt, including on dispatcher replay', async
   ).resolves.toMatchObject({ ok: true })
   expect(refreshSenders).toHaveBeenCalledOnce()
   expect(recordInteraction).toHaveBeenCalledWith('agent-orchestration')
+})
+
+it('requires current launch proof for local selective calls to a token-launched pane', async () => {
+  const { db, runtime } = harness.setup(false)
+  const handle = 'term_coord'
+  const launchToken = 'current-launch'
+  vi.mocked(runtime.getOrchestrationDispatchAuthority).mockReturnValue({
+    ...runtime.getOrchestrationDispatchAuthority(handle)!,
+    launchTokenHash: createHash('sha256').update(launchToken).digest('hex')
+  })
+  const selected = db.insertMessage({ from: 'sender', to: handle, subject: 'selective' })
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+  const request = {
+    id: 'rpc_selective_agent_pane',
+    authToken: 'test',
+    method: 'orchestration.ackMessages',
+    params: { terminal: handle, ackIds: [selected.id] },
+    orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+    orchestrationRequestId: 'agent-pane-selective'
+  }
+  const evidence = { terminalHandle: handle, paneKey: harness.coordinatorPaneKey }
+  const fenced = {
+    ok: false,
+    error: {
+      code: 'consumer_fenced',
+      message: expect.stringContaining('Run it from that pane or use an ordinary check'),
+      data: { effectsApplied: false }
+    }
+  }
+  await expect(dispatcher.dispatch(request)).resolves.toMatchObject(fenced)
+  await expect(
+    dispatcher.dispatch({
+      ...request,
+      orchestrationCompatibilityEvidence: { ...evidence, launchToken: 'previous-launch' }
+    })
+  ).resolves.toMatchObject(fenced)
+  expect(db.getMessageById(selected.id)?.read).toBe(0)
+  expect(db.readLocalMutationCallerFingerprint()).toBeUndefined()
+
+  await expect(
+    dispatcher.dispatch({
+      ...request,
+      orchestrationCompatibilityEvidence: { ...evidence, launchToken }
+    })
+  ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
+  await expect(dispatcher.dispatch(request)).resolves.toMatchObject(fenced)
+
+  const remote = db.insertMessage({ from: 'sender', to: handle, subject: 'paired selective' })
+  await expect(
+    dispatcher.dispatch(
+      { ...request, params: { ...request.params, ackIds: [remote.id] } },
+      {
+        pairedDeviceId: 'test-device',
+        authenticatedCallerFingerprint: 'test-fingerprint',
+        clientKind: 'runtime'
+      }
+    )
+  ).resolves.toMatchObject({ ok: true, result: { markedIds: [remote.id] } })
 })
 
 it('rejects a relay-only SSH attachment as a selective mailbox caller', async () => {

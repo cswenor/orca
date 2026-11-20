@@ -107,7 +107,10 @@ const workerDone = () => [
 ]
 
 describe('the relay-era orca CLI on the desktop runtime', () => {
-  it('refuses selective acknowledgment instead of consuming the Dispatch', async () => {
+  it.each([
+    ['--ack-ids', 'Selective acknowledgment is unavailable through the legacy SSH bridge'],
+    ['--ack-id', 'Unsupported check option through the legacy SSH bridge: --ack-id']
+  ])('refuses %s instead of consuming the Dispatch', async (flag, error) => {
     const mail = db.insertMessage({
       runId: ids.runId,
       from: COORDINATOR,
@@ -115,9 +118,7 @@ describe('the relay-era orca CLI on the desktop runtime', () => {
       subject: 'unread guidance',
       deliveryContract: 'current_delivery'
     })
-    await expect(run(['orchestration', 'check', '--ack-ids', mail.id])).rejects.toThrow(
-      'Selective acknowledgment is unavailable through the legacy SSH bridge'
-    )
+    await expect(run(['orchestration', 'check', flag, mail.id])).rejects.toThrow(error)
     expect(db.getMessageById(mail.id)?.read).toBe(0)
   })
 

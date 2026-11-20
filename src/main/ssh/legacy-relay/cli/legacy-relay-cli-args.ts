@@ -10,6 +10,23 @@ import {
 
 type LegacyRelayCliArgs = { command: string; flags: Map<string, string | boolean> }
 
+const LEGACY_CHECK_FLAGS = new Set([
+  'terminal',
+  'run',
+  'ack',
+  'unread',
+  'peek',
+  'all',
+  'types',
+  'format',
+  'inject',
+  'wait',
+  'timeout-ms',
+  'retry-request',
+  'full',
+  'json'
+])
+
 export function parseLegacyRelayCliArgs(argv: readonly string[]): LegacyRelayCliArgs {
   const commandPath: string[] = []
   const flags = new Map<string, string | boolean>()
@@ -34,10 +51,18 @@ export function parseLegacyRelayCliArgs(argv: readonly string[]): LegacyRelayCli
     }
   }
   const command = commandPath.join(' ')
-  if (command === 'orchestration check' && flags.has('ack-ids') && !flags.has('help')) {
-    throw new Error(
-      'Selective acknowledgment is unavailable through the legacy SSH bridge. Open a new terminal on this host.'
-    )
+  if (command === 'orchestration check' && !flags.has('help')) {
+    if (flags.has('ack-ids')) {
+      throw new Error(
+        'Selective acknowledgment is unavailable through the legacy SSH bridge. Open a new terminal on this host.'
+      )
+    }
+    // Do not ignore a flag and fall through to a consuming check.
+    for (const flag of flags.keys()) {
+      if (!LEGACY_CHECK_FLAGS.has(flag)) {
+        throw new Error(`Unsupported check option through the legacy SSH bridge: --${flag}`)
+      }
+    }
   }
   return { command, flags }
 }

@@ -1,3 +1,4 @@
+import type { OrchestrationCompatibilityEvidence } from '../../../../../shared/orchestration/orchestration-compatibility-evidence'
 import type { OrchestrationEntryCaller } from '../../../orchestration/addressing/orchestration-caller-identity'
 import type { DispatchContextRow } from '../../../orchestration/db/orchestration-records'
 import { OrchestrationError } from '../../../orchestration/orchestration-error'
@@ -21,14 +22,15 @@ export function assertSelectiveAckCaller(
   caller: OrchestrationEntryCaller | undefined,
   runtime: OrcaRuntimeService,
   handle: string,
-  process: string | null
+  process: string | null,
+  origin?: { evidence: OrchestrationCompatibilityEvidence | undefined; paired: boolean }
 ) {
   if (caller?.kind === 'peer') {
     throw selectiveAckPeerError()
   }
   const lease = caller?.revalidateAckLease?.()
   if (lease) {
-    return lease
+    return { lease }
   }
   // General pane/process lookups can include a relay-only SSH attachment, not a hosted PTY.
   const authority =
@@ -49,7 +51,40 @@ export function assertSelectiveAckCaller(
       { effectsApplied: false }
     )
   }
-  return undefined
+  if (origin) {
+    const { evidence, paired } = origin
+    const requiresLaunchProof = !paired && authority.launchTokenHash !== null
+    if (requiresLaunchProof || evidence?.launchToken || evidence?.host) {
+      const proof = runtime.verifyOrchestrationCompatibilityCaller(evidence, {
+        currentRuntimeLaunchSufficient: true
+      })
+      if (
+        !proof ||
+        proof.terminalHandle !== handle ||
+        proof.paneKey !== authority.paneKey ||
+        proof.processIncarnation !== process ||
+        (requiresLaunchProof && proof.launchTokenHash !== authority.launchTokenHash)
+      ) {
+        throw terminalEvidenceMismatch(requiresLaunchProof)
+      }
+    } else if (
+      (evidence?.terminalHandle || evidence?.paneKey) &&
+      (evidence.terminalHandle !== handle || evidence.paneKey !== authority.paneKey)
+    ) {
+      throw terminalEvidenceMismatch(false)
+    }
+  }
+  return { pty: { id: authority.ptyId, launchTokenHash: authority.launchTokenHash } }
+}
+
+function terminalEvidenceMismatch(requiresLaunchProof: boolean): OrchestrationError {
+  return new OrchestrationError(
+    'consumer_fenced',
+    requiresLaunchProof
+      ? 'Selective acknowledgment requires the current agent pane launch token. Run it from that pane or use an ordinary check.'
+      : 'Terminal evidence does not match this mailbox caller.',
+    { effectsApplied: false }
+  )
 }
 
 export function assertSelectiveAckDispatchProcess(

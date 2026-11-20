@@ -25,7 +25,8 @@ export async function runSelectiveAckMutation(
   params: unknown,
   invoke: (mutation: DurableMutationInvocation) => unknown,
   callerFingerprint: string | undefined,
-  caller: OrchestrationEntryCaller | undefined
+  caller: OrchestrationEntryCaller | undefined,
+  paired: boolean
 ): Promise<unknown> {
   const requestId = request.orchestrationRequestId
   if (!requestId) {
@@ -36,7 +37,7 @@ export async function runSelectiveAckMutation(
     )
   }
   const readBinding = () =>
-    hashCanonical(selectiveAckReceiptBinding(runtime, request, params, caller))
+    hashCanonical(selectiveAckReceiptBinding(runtime, request, params, caller, paired))
   const binding = readBinding()
   const { method } = request
   const payloadHash = hashCanonical({
@@ -86,7 +87,8 @@ function selectiveAckReceiptBinding(
   runtime: OrcaRuntimeService,
   request: RpcRequest,
   params: unknown,
-  caller: OrchestrationEntryCaller | undefined
+  caller: OrchestrationEntryCaller | undefined,
+  paired: boolean
 ) {
   if (
     !params ||
@@ -109,24 +111,12 @@ function selectiveAckReceiptBinding(
   const run = 'run' in params && typeof params.run === 'string' ? params.run : undefined
   const livePane = runtime.getTerminalPaneKey(handle)
   const process = runtime.getTerminalProcessIncarnation(handle)
-  const evidence = request.orchestrationCompatibilityEvidence
-  if (evidence?.launchToken || evidence?.host) {
-    const proof = runtime.verifyOrchestrationCompatibilityCaller(evidence, {
-      currentRuntimeLaunchSufficient: true
-    })
-    if (!proof || proof.terminalHandle !== handle || proof.processIncarnation !== process) {
-      throw terminalEvidenceMismatch()
-    }
-  } else if (
-    (evidence?.terminalHandle || evidence?.paneKey) &&
-    (evidence.terminalHandle !== handle || !evidence.paneKey || evidence.paneKey !== livePane)
-  ) {
-    // An interactive Orca shell carries its handle and pane without a provider launch token.
-    throw terminalEvidenceMismatch()
-  }
-  const lease = assertSelectiveAckCaller(caller, runtime, handle, process)
+  const callerBinding = assertSelectiveAckCaller(caller, runtime, handle, process, {
+    evidence: request.orchestrationCompatibilityEvidence,
+    paired
+  })
   if (run === ORCHESTRATION_UNBOUND_RUN_ID) {
-    return { process, lease, livePane, direct: handle }
+    return { process, callerBinding, livePane, direct: handle }
   }
   const db = runtime.getOrchestrationDb()
   const identity = orchestrationCallerIdentity(runtime, {
@@ -153,7 +143,11 @@ function selectiveAckReceiptBinding(
       const mailbox = `dispatch:${dispatch.id}`
       for (const row of getMessagesByIds(db, ackIds).values()) {
         if (row.to_handle === mailbox) {
-          assertSelectiveAckDispatchProcess(dispatch, process, lease ? caller?.orcaSessionId : null)
+          assertSelectiveAckDispatchProcess(
+            dispatch,
+            process,
+            callerBinding.lease ? caller?.orcaSessionId : null
+          )
           residual = [dispatch.id, dispatch.consumer_generation]
           break
         }
@@ -161,7 +155,7 @@ function selectiveAckReceiptBinding(
     }
     return {
       process,
-      lease,
+      callerBinding,
       livePane,
       run: [currentRun.id, currentRun.consumer_generation],
       dispatch: residual
@@ -170,7 +164,11 @@ function selectiveAckReceiptBinding(
   const attachment =
     !dispatch && paneKey ? db.findActiveRemoteAttachmentForPane(paneKey) : undefined
   if (dispatch) {
-    assertSelectiveAckDispatchProcess(dispatch, process, lease ? caller?.orcaSessionId : null)
+    assertSelectiveAckDispatchProcess(
+      dispatch,
+      process,
+      callerBinding.lease ? caller?.orcaSessionId : null
+    )
   }
   if (
     attachment &&
@@ -187,7 +185,7 @@ function selectiveAckReceiptBinding(
   }
   return {
     process,
-    lease,
+    callerBinding,
     livePane,
     dispatch: dispatch
       ? [dispatch.id, dispatch.run_id, dispatch.consumer_generation]
@@ -196,12 +194,4 @@ function selectiveAckReceiptBinding(
         : undefined,
     direct: dispatch || attachment ? undefined : handle
   }
-}
-
-function terminalEvidenceMismatch(): OrchestrationError {
-  return new OrchestrationError(
-    'consumer_fenced',
-    'Terminal evidence does not match this mailbox caller.',
-    { effectsApplied: false }
-  )
 }
