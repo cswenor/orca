@@ -73,7 +73,6 @@ export async function checkRunPendingMail(args: {
     )
   }
   if (params.ackIds) {
-    revalidateConsumer()
     return {
       result: acknowledgeSelectedMessages({
         db,
@@ -100,8 +99,9 @@ export async function checkRunPendingMail(args: {
                     throw dispatchFenced()
                   }
                   assertSelectiveAckDispatchProcess(
-                    current.process_incarnation,
-                    runtime.getTerminalProcessIncarnation(handle)
+                    current,
+                    runtime.getTerminalProcessIncarnation(handle),
+                    args.reader?.revalidateAckLease?.()
                   )
                 }
               }

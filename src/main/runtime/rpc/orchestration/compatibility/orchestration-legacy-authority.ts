@@ -76,6 +76,35 @@ export function verifyAttestedLegacyCandidate(args: {
 export class LegacyCompatibilityAuthority {
   constructor(private readonly runtime: OrcaRuntimeService) {}
 
+  /** Selective acknowledgment cannot attest or revive a retained principal. */
+  assertNotLegacySelectiveCaller(terminalHandle: string): void {
+    const db = this.runtime.getOrchestrationDb()
+    const runId = db.getLegacyAdoption()?.adopted_run_id
+    if (!runId) {
+      return
+    }
+    const paneKey = this.runtime.getTerminalPaneKey(terminalHandle) ?? undefined
+    const identity = { runId, terminalHandle, paneKey }
+    const handleOnly = { runId, terminalHandle }
+    const coordinator = db.getLegacyCoordinatorPrincipal(runId)
+    if (
+      db.resolveLegacyWorkerCandidate(identity) ||
+      db.resolveLegacyWorkerCandidate(handleOnly) ||
+      db.resolveLegacyCompatibilityPrincipalByIdentity({ ...identity, role: 'worker' }) ||
+      db.resolveLegacyCompatibilityPrincipalByIdentity({ ...handleOnly, role: 'worker' }) ||
+      (coordinator
+        ? coordinator.terminal_handle === terminalHandle ||
+          equivalentLegacyPaneKey(coordinator.pane_key, paneKey)
+        : db.isLegacyCoordinatorHandle(runId, terminalHandle))
+    ) {
+      throw new OrchestrationError(
+        'legacy_read_only',
+        'Selective acknowledgment is unavailable to retained legacy callers. No messages were acknowledged.',
+        { effectsApplied: false }
+      )
+    }
+  }
+
   resolveWorkerDispatch(
     request: RpcRequest,
     target: { terminalHandle?: string; dispatchId?: string; taskId?: string }

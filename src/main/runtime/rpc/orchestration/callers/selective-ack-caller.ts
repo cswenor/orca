@@ -1,4 +1,5 @@
 import type { OrchestrationEntryCaller } from '../../../orchestration/addressing/orchestration-caller-identity'
+import type { DispatchContextRow } from '../../../orchestration/db/orchestration-records'
 import { OrchestrationError } from '../../../orchestration/orchestration-error'
 import { sessionIdFromStructuredWorkerIncarnation } from '../../../orchestration/terminal-authority/structured-sessions/structured-worker-incarnation'
 import type { OrcaRuntimeService } from '../../../orca-runtime'
@@ -48,10 +49,16 @@ export function assertSelectiveAckCaller(
 }
 
 export function assertSelectiveAckDispatchProcess(
-  recorded: string | null,
-  current: string | null
+  dispatch: Pick<DispatchContextRow, 'process_incarnation' | 'assignee_orca_session_id'>,
+  process: string | null,
+  lease?: readonly [string, number]
 ): void {
-  if (recorded !== null && recorded !== current) {
+  const liveTerminal =
+    process !== null &&
+    dispatch.process_incarnation === process &&
+    !sessionIdFromStructuredWorkerIncarnation(process)
+  const liveAssignee = lease !== undefined && lease[0] === dispatch.assignee_orca_session_id
+  if (!liveTerminal && !liveAssignee) {
     throw new OrchestrationError(
       'consumer_fenced',
       'This Dispatch is not attached to the current process. No messages were acknowledged.',

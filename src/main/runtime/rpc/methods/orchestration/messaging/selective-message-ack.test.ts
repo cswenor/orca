@@ -131,6 +131,27 @@ it('refuses a stale terminal and saved pane without a mutation ID', async () => 
   expect(db.getMessageById(selected.id)?.read).toBe(0)
 })
 
+it.each(['worker_done', 'heartbeat'] as const)(
+  'refuses a mixed selection containing a %s lifecycle report without taking mail',
+  async (type) => {
+    const { db, ctx, activeRunId } = harness.setup()
+    const to = `run:${activeRunId}`
+    const status = db.insertMessage({ from: 'term_sender', to, subject: 'plain status' })
+    const report = db.insertMessage({ from: 'term_sender', to, subject: 'lifecycle report', type })
+    await expect(
+      harness.call(
+        'orchestration.ackMessages',
+        { terminal: 'term_coord', ackIds: [status.id, report.id] },
+        ctx
+      )
+    ).rejects.toMatchObject({
+      code: 'invalid_argument',
+      message: expect.stringContaining('Use a normal check')
+    })
+    expect(db.getUnreadMessages(to).map((message) => message.id)).toEqual([status.id, report.id])
+  }
+)
+
 it.each(['pty:retained', 'structured:released'])(
   'does not treat %s as live mailbox authority',
   async (process) => {
@@ -151,35 +172,38 @@ it.each(['pty:retained', 'structured:released'])(
   }
 )
 
-it('refuses a replacement on the same pane until the local Dispatch is reattached', async () => {
-  const { db, runtime, ctx } = harness.setup()
-  const pane = 'tab_worker:33333333-3333-4333-9333-333333333333'
-  vi.mocked(runtime.getTerminalPaneKey).mockImplementation((handle) =>
-    handle === 'term_worker' ? pane : harness.coordinatorPaneKey
-  )
-  const task = db.createTask({ spec: 'worker before binding' })
-  const dispatch = createRootDispatch(db, task.id, 'term_worker', pane, undefined, 'pty:prior')
-  const selected = db.insertMessage({
-    from: 'term_coord',
-    to: `dispatch:${dispatch.id}`,
-    runId: dispatch.run_id,
-    subject: 'pre-bind question'
-  })
-  const check = () =>
-    harness.call(
-      'orchestration.ackMessages',
-      { terminal: 'term_worker', ackIds: [selected.id] },
-      ctx
+it.each([undefined, 'pty:prior'])(
+  'requires the current Dispatch process (recorded: %s)',
+  async (process) => {
+    const { db, runtime, ctx } = harness.setup()
+    const pane = 'tab_worker:33333333-3333-4333-9333-333333333333'
+    vi.mocked(runtime.getTerminalPaneKey).mockImplementation((handle) =>
+      handle === 'term_worker' ? pane : harness.coordinatorPaneKey
     )
-  await expect(check()).rejects.toMatchObject({ code: 'consumer_fenced' })
-  expect(db.getMessageById(selected.id)?.read).toBe(0)
-  reattachDispatchConsumer(db, {
-    dispatchId: dispatch.id,
-    paneKey: pane,
-    processIncarnation: 'runtime_test:term_worker:1'
-  })
-  await expect(check()).resolves.toMatchObject({ markedIds: [selected.id] })
-})
+    const task = db.createTask({ spec: 'worker before binding' })
+    const dispatch = createRootDispatch(db, task.id, 'term_worker', pane, undefined, process)
+    const selected = db.insertMessage({
+      from: 'term_coord',
+      to: `dispatch:${dispatch.id}`,
+      runId: dispatch.run_id,
+      subject: 'pre-bind question'
+    })
+    const check = () =>
+      harness.call(
+        'orchestration.ackMessages',
+        { terminal: 'term_worker', ackIds: [selected.id] },
+        ctx
+      )
+    await expect(check()).rejects.toMatchObject({ code: 'consumer_fenced' })
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+    reattachDispatchConsumer(db, {
+      dispatchId: dispatch.id,
+      paneKey: pane,
+      processIncarnation: 'runtime_test:term_worker:1'
+    })
+    await expect(check()).resolves.toMatchObject({ markedIds: [selected.id] })
+  }
+)
 
 it('replays only on the original process and implicit Run', async () => {
   const { db, runtime, activeRunId } = harness.setup()
@@ -232,7 +256,14 @@ it('selectively acknowledges pre-bind Dispatch mail without disturbing an outsta
     handle === 'term_lead' ? pane : harness.coordinatorPaneKey
   )
   const task = db.createTask({ spec: 'nested lead' })
-  const dispatch = createRootDispatch(db, task.id, 'term_lead', pane)
+  const dispatch = createRootDispatch(
+    db,
+    task.id,
+    'term_lead',
+    pane,
+    undefined,
+    'runtime_test:term_lead:1'
+  )
   const run = db.createRun({
     objective: 'child Run',
     coordinatorHandle: 'term_lead',
@@ -311,7 +342,14 @@ it('rejects the wrong owning Run and keeps a receipt on the original Dispatch ge
     handle === 'term_worker' ? pane : harness.coordinatorPaneKey
   )
   const task = db.createTask({ spec: 'worker receipt' })
-  const dispatch = createRootDispatch(db, task.id, 'term_worker', pane)
+  const dispatch = createRootDispatch(
+    db,
+    task.id,
+    'term_worker',
+    pane,
+    undefined,
+    'runtime_test:term_worker:1'
+  )
   db.insertMessage({
     id: 'msg_worker_selected',
     from: 'term_coord',

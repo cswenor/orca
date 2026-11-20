@@ -1,7 +1,6 @@
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import { getMessagesByIds } from '../../../../orchestration/db/messages/messages-by-id'
 import { runLifecycleWriteTransaction } from '../../../../orchestration/db/lifecycle-write-transaction-runner'
-import { reconcileLifecycleMessage } from '../../../../orchestration/workers/lifecycle/lifecycle-reconciliation'
 import { runOwnsDirectMessageSql } from '../../../../orchestration/db/runs/run-coordinator-mail-routing'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
 import { exposeMessages } from './mailbox-message-receipt'
@@ -57,6 +56,13 @@ export function acknowledgeSelectedMessages(args: {
           { effectsApplied: false }
         )
       }
+      if (message.type === 'worker_done' || message.type === 'heartbeat') {
+        throw new OrchestrationError(
+          'invalid_argument',
+          'Selected mail is a lifecycle report. Use a normal check for that mail. No messages were acknowledged.',
+          { effectsApplied: false }
+        )
+      }
       return message
     })
     if (directIdsJson !== undefined && isRunOwned?.get(directIdsJson)) {
@@ -81,14 +87,6 @@ export function acknowledgeSelectedMessages(args: {
         'Selected mail is held by a structured chat. Use a normal check for that mail. No messages were acknowledged.',
         { effectsApplied: false }
       )
-    }
-    for (let index = 0; index < messages.length; index++) {
-      const message = messages[index]
-      if (message.type === 'worker_done' || message.type === 'heartbeat') {
-        reconcileLifecycleMessage(db, message)
-        // Reconciliation can rewrite a rejected lifecycle message's payload and type.
-        messages[index] = db.getMessageById(message.id) ?? message
-      }
     }
     db.markAsRead(markedIds)
     const marked = new Set(markedIds)

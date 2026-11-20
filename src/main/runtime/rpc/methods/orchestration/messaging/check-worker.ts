@@ -49,7 +49,6 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
   db.requireRun(deliveryRunId)
   const mailboxIdentity = { runId: deliveryRunId, dispatchId: workerMailbox.dispatchId }
   const address = `dispatch:${workerMailbox.dispatchId}`
-  // Federated hosts keep consumer generations on remote_dispatch_attachments, without a dispatch_contexts row.
   const readCurrentGeneration = (): number | undefined =>
     activeDispatch
       ? db.getDispatchContextById(workerMailbox.dispatchId)?.consumer_generation
@@ -60,15 +59,13 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
       if (current?.id !== activeDispatch.id) {
         return false
       }
-      // Re-attachment during awaits can retain the id while changing the pane.
       if (!callerHoldsDispatchPane(current, paneKey)) {
         throw dispatchFenced()
       }
       if (params.ackIds) {
-        assertSelectiveAckDispatchProcess(
-          current.process_incarnation,
-          runtime.getTerminalProcessIncarnation(handle)
-        )
+        const process = runtime.getTerminalProcessIncarnation(handle)
+        const lease = args.reader?.revalidateAckLease?.()
+        assertSelectiveAckDispatchProcess(current, process, lease)
       }
       return true
     }
@@ -84,6 +81,7 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
   }
   const revalidateWorkerConsumer = () => {
     args.revalidateCaller?.()
+    args.revalidateConsumer?.()
     if (readCurrentGeneration() !== workerMailbox.generation || !holdsWorkerMailbox()) {
       throw dispatchFenced()
     }

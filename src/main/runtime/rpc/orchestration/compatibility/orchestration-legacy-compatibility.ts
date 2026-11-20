@@ -19,7 +19,6 @@ import type {
   LegacySendParams
 } from './orchestration-legacy-operation'
 import { LegacyCoordinatorAuthority } from './orchestration-legacy-coordinator-authority'
-import { OrchestrationError } from '../../../orchestration/orchestration-error'
 import { isSelectiveAckRequest } from '../callers/selective-ack-caller'
 
 const COORDINATOR_PREFLIGHT_METHODS = new Set([
@@ -77,7 +76,7 @@ export class OrchestrationLegacyCompatibility {
     if (isSelectiveAckRequest(request)) {
       const terminal = stringValue(values.terminal)
       if (terminal) {
-        this.assertNotLegacySelectiveCaller(terminal)
+        this.authority.assertNotLegacySelectiveCaller(terminal)
       }
       return { handled: false }
     }
@@ -141,30 +140,6 @@ export class OrchestrationLegacyCompatibility {
           revalidate: () => this.revalidateCoordinatorAuthority(request, authority)
         }
       : undefined
-  }
-
-  private assertNotLegacySelectiveCaller(terminalHandle: string): void {
-    const db = this.runtime.getOrchestrationDb()
-    const runId = db.getLegacyAdoption()?.adopted_run_id
-    if (!runId) {
-      return
-    }
-    const paneKey = this.runtime.getTerminalPaneKey(terminalHandle) ?? undefined
-    const identity = { runId, terminalHandle, paneKey }
-    const handleOnly = { runId, terminalHandle }
-    if (
-      db.resolveLegacyWorkerCandidate(identity) ||
-      db.resolveLegacyWorkerCandidate(handleOnly) ||
-      db.resolveLegacyCompatibilityPrincipalByIdentity({ ...identity, role: 'worker' }) ||
-      db.resolveLegacyCompatibilityPrincipalByIdentity({ ...handleOnly, role: 'worker' }) ||
-      db.resolveLegacyCoordinatorCandidate(identity)
-    ) {
-      throw new OrchestrationError(
-        'legacy_read_only',
-        'Selective acknowledgment is unavailable to retained legacy callers. No messages were acknowledged.',
-        { effectsApplied: false }
-      )
-    }
   }
 
   private resolveCurrentAuthority(

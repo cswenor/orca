@@ -266,6 +266,24 @@ describe('legacy compatibility after explicit takeover', () => {
     })
     expect(harness.db.getDispatchContextById(harness.dispatchId)?.status).toBe('dispatched')
     expect(harness.db.getLegacyCoordinatorPrincipal(harness.adoptedRunId)?.status).toBe('revoked')
+    vi.spyOn(harness.runtime, 'getLiveTerminalPaneKey').mockReturnValue(COORDINATOR_PANE)
+    vi.spyOn(harness.runtime, 'getTerminalProcessIncarnation').mockReturnValue('process-1')
+    const direct = harness.db.insertMessage({
+      from: CURRENT_COORDINATOR_HANDLE,
+      to: COORDINATOR_HANDLE,
+      subject: 'unbound mail after takeover'
+    })
+    await expect(
+      harness.dispatcher.dispatch(
+        request(
+          'orchestration.ackMessages',
+          { terminal: COORDINATOR_HANDLE, run: 'run_unbound', ackIds: [direct.id] },
+          evidence('coordinator'),
+          'refuse-displaced-coordinator'
+        )
+      )
+    ).resolves.toMatchObject({ ok: false, error: { code: 'legacy_read_only' } })
+    expect(harness.db.getMessageById(direct.id)?.read).toBe(0)
     expect(harness.db.getMessageById(unrelated.id)).toMatchObject({
       to_handle: 'term_peer_worker',
       delivery_contract: 'legacy_direct'

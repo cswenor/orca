@@ -70,7 +70,7 @@ export function selectiveAckReceiptBinding(
       const mailbox = `dispatch:${dispatch.id}`
       for (const row of getMessagesByIds(db, ackIds).values()) {
         if (row.to_handle === mailbox) {
-          assertSelectiveAckDispatchProcess(dispatch.process_incarnation, process)
+          assertSelectiveAckDispatchProcess(dispatch, process, lease)
           residual = [dispatch.id, dispatch.consumer_generation]
           break
         }
@@ -86,7 +86,7 @@ export function selectiveAckReceiptBinding(
   const attachment =
     !dispatch && paneKey ? db.findActiveRemoteAttachmentForPane(paneKey) : undefined
   if (dispatch) {
-    assertSelectiveAckDispatchProcess(dispatch.process_incarnation, process)
+    assertSelectiveAckDispatchProcess(dispatch, process, lease)
   }
   if (
     attachment &&
