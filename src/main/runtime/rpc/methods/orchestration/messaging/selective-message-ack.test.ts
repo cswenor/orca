@@ -148,7 +148,8 @@ it.each(['worker_done', 'heartbeat'] as const)(
       code: 'invalid_argument',
       message: expect.stringContaining('Use a normal check')
     })
-    expect(db.getUnreadMessages(to).map((message) => message.id)).toEqual([status.id, report.id])
+    expect(db.getMessageById(status.id)).toEqual(status)
+    expect(db.getMessageById(report.id)).toEqual(report)
   }
 )
 
