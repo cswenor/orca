@@ -10,7 +10,6 @@ import { staleDelivery } from '../../../../orchestration/db/messages/role-mailbo
 import { ORCHESTRATION_LEGACY_RUN_ID } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
 import type { CheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 import type { z } from 'zod'
-import { acknowledgeSelectedMessages } from './selective-message-ack'
 
 type CheckParamsInput = z.infer<typeof CheckParams>
 
@@ -34,10 +33,8 @@ export async function checkDirectMailbox(args: {
     throw staleDelivery(db, params.ack)
   }
   if (params.ackIds) {
-    return acknowledgeSelectedMessages({
-      db,
+    return args.reconciliation.acknowledgeSelected({
       mailbox: handle,
-      signal,
       ids: params.ackIds,
       direct: true,
       runId: args.runId,

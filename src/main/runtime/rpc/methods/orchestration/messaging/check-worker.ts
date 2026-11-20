@@ -14,7 +14,6 @@ import { asDispatchFence, callerHoldsDispatchPane, dispatchFenced } from './disp
 import { interruptedAcknowledgedCheck } from '../routing'
 import type { MessageWake } from '../../../../orchestration/mailbox/runtime-message-waiters'
 import { currentDispatchAssigneeRun } from './recipient-routing'
-import { acknowledgeSelectedMessages } from './selective-message-ack'
 import { assertSelectiveAckDispatchProcess } from '../../../orchestration/callers/selective-ack-caller'
 
 export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
@@ -64,12 +63,8 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
       }
       if (params.ackIds) {
         const process = runtime.getTerminalProcessIncarnation(handle)
-        const lease = args.reader?.revalidateAckLease?.()
-        assertSelectiveAckDispatchProcess(
-          current,
-          process,
-          lease ? args.reader?.orcaSessionId : null
-        )
+        const assignee = args.reader?.revalidateAckLease?.() ? args.reader.orcaSessionId : null
+        assertSelectiveAckDispatchProcess(current, process, assignee)
       }
       return true
     }
@@ -91,10 +86,8 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
     }
   }
   if (params.ackIds) {
-    return acknowledgeSelectedMessages({
-      db,
+    return args.reconciliation.acknowledgeSelected({
       mailbox: address,
-      signal,
       ids: params.ackIds,
       direct: false,
       mailboxIdentity,

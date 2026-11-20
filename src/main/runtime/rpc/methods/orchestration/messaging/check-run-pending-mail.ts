@@ -14,7 +14,6 @@ import type {
 } from '../../../../orchestration/addressing/orchestration-caller-identity'
 import type { CheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 import type { z } from 'zod'
-import { acknowledgeSelectedMessages } from './selective-message-ack'
 import { assertSelectiveAckDispatchProcess } from '../../../orchestration/callers/selective-ack-caller'
 
 export async function checkRunPendingMail(args: {
@@ -74,9 +73,7 @@ export async function checkRunPendingMail(args: {
   }
   if (params.ackIds) {
     return {
-      result: acknowledgeSelectedMessages({
-        db,
-        signal: args.signal,
+      result: await args.reconciliation.acknowledgeSelected({
         mailbox: address,
         ids: params.ackIds,
         direct: false,

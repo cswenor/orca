@@ -1,6 +1,5 @@
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import { getMessagesByIds } from '../../../../orchestration/db/messages/messages-by-id'
-import { runLifecycleWriteTransaction } from '../../../../orchestration/db/lifecycle-write-transaction-runner'
 import { runOwnsDirectMessageSql } from '../../../../orchestration/db/runs/run-coordinator-mail-routing'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
 import { exposeMessages } from './mailbox-message-receipt'
@@ -10,13 +9,11 @@ export function acknowledgeSelectedMessages(args: {
   db: OrchestrationDb
   mailbox: string
   ids: string[]
-  signal?: AbortSignal
   direct: boolean
   runId?: string
   recordReceipt?: (receipt: unknown) => void
   mailboxIdentity?: { runId: string; dispatchId?: string }
   residual?: { mailbox: string; runId: string; revalidate: () => void }
-  revalidateConsumer: () => void
 }) {
   const { db, mailbox, residual } = args
   const ids = [...new Set(args.ids)]
@@ -27,7 +24,6 @@ export function acknowledgeSelectedMessages(args: {
     : undefined
   const directIdsJson = args.direct ? JSON.stringify(ids) : undefined
   const validateSelection = () => {
-    args.revalidateConsumer()
     const rows = getMessagesByIds(db, ids)
     const messages = ids.map((id) => {
       const message = rows.get(id)
@@ -77,32 +73,29 @@ export function acknowledgeSelectedMessages(args: {
     }
     return messages
   }
-  return runLifecycleWriteTransaction(db.db, 'ack_selected_messages', () => {
-    args.signal?.throwIfAborted()
-    const messages = validateSelection().filter((message) => message.read === 0)
-    const markedIds = messages.map((message) => message.id)
-    if (db.getStructuredMailSendsForMessages(markedIds).length) {
-      throw new OrchestrationError(
-        'invalid_argument',
-        'Selected mail is held by a structured chat. Use a normal check for that mail. No messages were acknowledged.',
-        { effectsApplied: false }
-      )
-    }
-    if (markedIds.length) {
-      db.db
-        .prepare('UPDATE messages SET read = 1 WHERE id IN (SELECT value FROM json_each(?))')
-        .run(JSON.stringify(markedIds))
-    }
-    const marked = new Set(markedIds)
-    const response = {
-      ...args.mailboxIdentity,
-      messages: exposeMessages(messages.map((message) => ({ ...message, read: 1 }))),
-      count: messages.length,
-      acknowledged: null,
-      markedIds,
-      alreadyReadIds: ids.filter((id) => !marked.has(id))
-    }
-    args.recordReceipt?.(response)
-    return response
-  })
+  const messages = validateSelection().filter((message) => message.read === 0)
+  const markedIds = messages.map((message) => message.id)
+  if (db.getStructuredMailSendsForMessages(markedIds).length) {
+    throw new OrchestrationError(
+      'invalid_argument',
+      'Selected mail is held by a structured chat. Use a normal check for that mail. No messages were acknowledged.',
+      { effectsApplied: false }
+    )
+  }
+  if (markedIds.length) {
+    db.db
+      .prepare('UPDATE messages SET read = 1 WHERE id IN (SELECT value FROM json_each(?))')
+      .run(JSON.stringify(markedIds))
+  }
+  const marked = new Set(markedIds)
+  const response = {
+    ...args.mailboxIdentity,
+    messages: exposeMessages(messages.map((message) => ({ ...message, read: 1 }))),
+    count: messages.length,
+    acknowledged: null,
+    markedIds,
+    alreadyReadIds: ids.filter((id) => !marked.has(id))
+  }
+  args.recordReceipt?.(response)
+  return response
 }

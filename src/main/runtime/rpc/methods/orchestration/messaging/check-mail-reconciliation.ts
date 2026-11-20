@@ -15,6 +15,7 @@ import type { StructuredMailSourceHold } from '../../../../../native-chat/agent-
 import type { JournalMailObservation } from '../../../../../native-chat/agent-session-journal/journal-mail-observation'
 import type { MessageWake } from '../../../../orchestration/mailbox/runtime-message-waiters'
 import { ORCHESTRATION_MAIL_RECONCILIATION_TIMEOUT_MS } from '../../../../../../shared/orchestration/orchestration-timing-budgets'
+import { acknowledgeSelectedMessages } from './selective-message-ack'
 
 const UNKNOWN_MAIL: JournalMailObservation = {
   epoch: '',
@@ -83,14 +84,27 @@ export class CheckMailReconciliation {
     }
   }
 
-  private async reconcile<T>(args: {
-    selected: readonly MessageRow[]
-    direct: boolean
-    revalidate: () => void
-    claimId?: string
-    finalize: (messages: MessageRow[]) => T
-    commit?: (take: () => T) => T
-  }): Promise<T> {
+  private async reconcile<T>(
+    args:
+      | {
+          selected: readonly MessageRow[]
+          direct: boolean
+          revalidate: () => void
+          claimId?: string
+          finalize: (messages: MessageRow[]) => T
+          commit?: (take: () => T) => T
+        }
+      | { revalidate: () => void; markOnly: () => T }
+  ): Promise<T> {
+    const commit = (apply: () => T): T =>
+      runLifecycleWriteTransaction(this.db.db, 'check_reconciled_mail', () => {
+        this.assertCurrent(args.revalidate)
+        return apply()
+      })
+    // The mark-only mode uses this mailbox owner's transaction but never takes custody.
+    if ('markOnly' in args) {
+      return commit(args.markOnly)
+    }
     await this.within(() => Promise.resolve())
     this.assertCurrent(args.revalidate)
     const ids = args.selected.map((message) => message.id)
@@ -131,8 +145,7 @@ export class CheckMailReconciliation {
           }
         }
         const take = () =>
-          runLifecycleWriteTransaction(this.db.db, 'check_reconciled_mail', () => {
-            this.assertCurrent(args.revalidate)
+          commit(() => {
             const current = this.db.getStructuredMailSendsForMessages(ids)
             const sameReservations = reservationSet(current) === observedSet
             if (!sameReservations && !this.deadline.signal.aborted) {
@@ -210,6 +223,17 @@ export class CheckMailReconciliation {
         hold?.release()
       }
     }
+  }
+
+  acknowledgeSelected(
+    args: Omit<Parameters<typeof acknowledgeSelectedMessages>[0], 'db'> & {
+      revalidateConsumer: () => void
+    }
+  ) {
+    return this.reconcile({
+      revalidate: args.revalidateConsumer,
+      markOnly: () => acknowledgeSelectedMessages({ ...args, db: this.db })
+    })
   }
 
   async takeDirect<T>(args: {

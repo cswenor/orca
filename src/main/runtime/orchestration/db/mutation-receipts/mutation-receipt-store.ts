@@ -39,51 +39,38 @@ export function getOrCreateLocalMutationCallerFingerprint(this: OrchestrationDb)
   return (this.localMutationCallerFingerprint ??= ensureStoredLocalCaller(this))
 }
 
-/** The operation's transaction owns capacity and the completed row together with its effects. */
-export function insertCompletedMutationReceipt(
-  this: OrchestrationDb,
-  params: {
-    callerFingerprint?: string
-    requestId: string
-    method: string
-    payloadHash: string
-    receipt: string
-  }
-): void {
-  const caller = params.callerFingerprint ?? ensureStoredLocalCaller(this)
-  if (this.getMutationReceipt(caller, params.requestId)) {
-    throw new OrchestrationError(
-      'request_mismatch',
-      `Mutation request ${params.requestId} already has a durable receipt.`
-    )
-  }
-  ensureMutationReceiptCapacity(this.db)
-  this.db
-    .prepare(
-      `INSERT INTO mutation_receipts (
-         caller_fingerprint, request_id, method, payload_hash, state, receipt
-       ) VALUES (?, ?, ?, ?, 'completed', ?)`
-    )
-    .run(caller, params.requestId, params.method, params.payloadHash, params.receipt)
-}
-
 export function beginMutationReceipt(
   this: OrchestrationDb,
   params: {
-    callerFingerprint: string
     requestId: string
     method: string
     payloadHash: string
-  }
+  } & (
+    | { callerFingerprint: string; receipt?: undefined }
+    | { callerFingerprint?: string; receipt: string }
+  )
 ):
   | { disposition: 'started'; row: MutationReceiptRow }
   | { disposition: 'pending'; row: MutationReceiptRow }
   | { disposition: 'completed'; row: MutationReceiptRow } {
-  this.db.exec('BEGIN IMMEDIATE')
+  // A selected mailbox write provides its final response and owns the transaction.
+  const complete = params.receipt !== undefined
+  if (complete) {
+    if (!this.db.isTransaction) {
+      throw new Error('A completed mutation receipt requires the effect transaction.')
+    }
+  } else {
+    this.db.exec('BEGIN IMMEDIATE')
+  }
   try {
-    const existing = this.getMutationReceipt(params.callerFingerprint, params.requestId)
+    const caller = params.callerFingerprint ?? ensureStoredLocalCaller(this)
+    const existing = this.getMutationReceipt(caller, params.requestId)
     if (existing) {
-      if (existing.method !== params.method || existing.payload_hash !== params.payloadHash) {
+      if (
+        complete ||
+        existing.method !== params.method ||
+        existing.payload_hash !== params.payloadHash
+      ) {
         throw new OrchestrationError(
           'request_mismatch',
           `Mutation request ${params.requestId} was already used with different input.`
@@ -93,18 +80,28 @@ export function beginMutationReceipt(
       return { disposition: existing.state, row: existing }
     }
     ensureMutationReceiptCapacity(this.db)
-    this.db
+    const row = this.db
       .prepare(
         `INSERT INTO mutation_receipts (
-           caller_fingerprint, request_id, method, payload_hash, state
-         ) VALUES (?, ?, ?, ?, 'pending')`
+           caller_fingerprint, request_id, method, payload_hash, state, receipt
+         ) VALUES (?, ?, ?, ?, ?, ?) RETURNING ${MUTATION_RECEIPT_COLUMN_LIST}`
       )
-      .run(params.callerFingerprint, params.requestId, params.method, params.payloadHash)
-    const row = this.getMutationReceipt(params.callerFingerprint, params.requestId)
-    this.db.exec('COMMIT')
+      .get(
+        caller,
+        params.requestId,
+        params.method,
+        params.payloadHash,
+        complete ? 'completed' : 'pending',
+        params.receipt ?? null
+      )
+    if (!complete) {
+      this.db.exec('COMMIT')
+    }
     return { disposition: 'started', row: row as MutationReceiptRow }
   } catch (error) {
-    this.db.exec('ROLLBACK')
+    if (!complete) {
+      this.db.exec('ROLLBACK')
+    }
     throw error
   }
 }
@@ -235,7 +232,6 @@ export function getMutationReceipt(
 export type MutationReceiptStoreMethods = {
   getOrCreateLocalMutationCallerFingerprint: typeof getOrCreateLocalMutationCallerFingerprint
   readLocalMutationCallerFingerprint: typeof readLocalMutationCallerFingerprint
-  insertCompletedMutationReceipt: typeof insertCompletedMutationReceipt
   beginMutationReceipt: typeof beginMutationReceipt
   completeMutationReceipt: typeof completeMutationReceipt
   checkpointPendingMutationReceipt: typeof checkpointPendingMutationReceipt
@@ -249,7 +245,6 @@ export function attachMutationReceiptStore(ctor: { prototype: object }): void {
   Object.assign(ctor.prototype, {
     getOrCreateLocalMutationCallerFingerprint,
     readLocalMutationCallerFingerprint,
-    insertCompletedMutationReceipt,
     beginMutationReceipt,
     completeMutationReceipt,
     checkpointPendingMutationReceipt,

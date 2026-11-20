@@ -69,7 +69,7 @@ export async function runSelectiveAckMutation(
           effectsApplied: false
         })
       }
-      db.insertCompletedMutationReceipt({
+      db.beginMutationReceipt({
         callerFingerprint: fingerprint,
         requestId,
         method,
