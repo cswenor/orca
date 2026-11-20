@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { Pressable, Text, View } from 'react-native'
-import { Plus } from 'lucide-react-native'
+import { Bell, Plus } from 'lucide-react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 import Animated, {
   Easing,
@@ -10,22 +10,28 @@ import Animated, {
   withSequence,
   withTiming
 } from 'react-native-reanimated'
-import { triggerMediumImpact, triggerSelection } from '../../platform/haptics'
+import { triggerMediumImpact, triggerSelection } from '../../platform/haptics/haptics'
 import { useMobileTranslation } from '../../i18n/use-mobile-translation'
-import { AgentStateDot } from '../../components/AgentStateDot'
-import { ArrivalFade } from '../../components/ArrivalFade'
+import { AgentStateDot } from '../../agents/presentation/AgentStateDot'
+import { ArrivalFade } from '../../components/motion/ArrivalFade'
 import { useDrawerReducedMotion } from '../../components/bottom-drawer/bottom-drawer-constants'
-import { SHEET_CURVE } from '../../components/sheet-motion-values'
-import { useReducedMotionEnabled } from '../../platform/use-reduced-motion'
-import { useKeyboardPersistingTaps } from '../../platform/keyboard-persisting-taps'
+import { SHEET_CURVE } from '../../components/motion/sheet-motion-values'
+import { useReducedMotionEnabled } from '../../platform/accessibility/use-reduced-motion'
+import { useKeyboardPersistingTaps } from '../../platform/keyboard/keyboard-persisting-taps'
 import { useNow } from '../../hooks/use-now'
-import { agentStateLabel, type AgentDotState } from '../../worktree/agent-row-display'
+import { agentStateLabel, type AgentDotState } from '../../worktree/agent-lineage/agent-row-display'
 import { colors, feedback, radii, spacing } from '../../theme/mobile-theme'
 import { themedStyleSheet } from '../../theme/themed-styles'
 import { useMobileColorScheme } from '../../theme/use-mobile-color-scheme'
-import { buildMobileSessionTabRow, type MobileSessionTabRow } from './mobile-session-tab-rows'
+import {
+  buildMobileSessionTabSummary,
+  isForkedChatTab,
+  type MobileSessionTabSummary
+} from './mobile-session-tab-rows'
 import { MobileSessionTabMark } from './MobileSessionTabMark'
 import { MobileSessionTabsSheet } from './MobileSessionTabsSheet'
+import { MobileForkMarkedName } from '../fork/MobileForkMarkedName'
+import { mobileForkAccessibleName } from '../fork/mobile-fork-marked-name'
 import type { MobileSessionController } from '../use-mobile-session-controller'
 
 const SWIPE_SETTLE_MS = 250
@@ -84,11 +90,18 @@ export function MobileSessionTabBar({
   const keepsKeyboard = useKeyboardPersistingTaps('handled')
   const now = useNow(60_000)
   const rows = useMemo(
-    () => visibleTabs.map((tab) => buildMobileSessionTabRow(tab, terminals, now)),
-    [visibleTabs, terminals, now]
+    () =>
+      visibleTabs.map((tab) => {
+        const summary = buildMobileSessionTabSummary(tab, terminals, now)
+        // The tab on screen is being read (useMarkViewedAgentRead), so it never rings.
+        return summary.unread && tab.id === activeSessionTabId
+          ? { ...summary, unread: false }
+          : summary
+      }),
+    [visibleTabs, terminals, now, activeSessionTabId]
   )
   const activeIndex = rows.findIndex((row) => row.tab.id === activeSessionTabId)
-  const active: MobileSessionTabRow | undefined = rows[activeIndex]
+  const active: MobileSessionTabSummary | undefined = rows[activeIndex]
   const previous = activeIndex > 0 ? rows[activeIndex - 1] : undefined
   const next = activeIndex !== -1 ? rows[activeIndex + 1] : undefined
   const othersNeedYou = rows.some(
@@ -108,7 +121,7 @@ export function MobileSessionTabBar({
         ? { duration: 0, reduceMotion: ReduceMotion.Never }
         : { duration: SWIPE_SETTLE_MS, easing: Easing.bezier(...SHEET_CURVE) }
     )
-  const step = (target: MobileSessionTabRow | undefined, direction: 1 | -1) => {
+  const step = (target: MobileSessionTabSummary | undefined, direction: 1 | -1) => {
     if (!target) {
       offset.value = settle(0)
       return
@@ -161,11 +174,16 @@ export function MobileSessionTabBar({
     rows.length === 1
       ? t('session.tabBar.oneTab', '1 tab')
       : t('session.tabBar.tabCount', '{{count}} tabs', { count: rows.length })
-  const tabLabel = [active?.title, status ? agentStateLabel(status) : null]
+  const tabLabel = [
+    active && isForkedChatTab(active.tab) ? mobileForkAccessibleName(active.title) : active?.title,
+    status ? agentStateLabel(status) : null
+  ]
     .filter(Boolean)
     .join(', ')
+  const anyUnread = rows.some((row) => row.unread)
   const countAccessibilityLabel = [
     countLabel,
+    anyUnread ? t('agents.list.unread', 'Unread') : null,
     othersNeedYou ? t('session.tabBar.anotherNeedsYou', 'another tab needs you') : null
   ]
     .filter(Boolean)
@@ -227,7 +245,11 @@ export function MobileSessionTabBar({
                 </>
               ) : null}
               <Text style={styles.title} numberOfLines={1}>
-                {active?.title ?? countLabel}
+                {active && isForkedChatTab(active.tab) ? (
+                  <MobileForkMarkedName name={active.title} />
+                ) : (
+                  (active?.title ?? countLabel)
+                )}
               </Text>
             </Animated.View>
           </Pressable>
@@ -247,6 +269,7 @@ export function MobileSessionTabBar({
         <View style={styles.countBox}>
           <Text style={styles.countText}>{rows.length}</Text>
         </View>
+        {anyUnread ? <Bell size={12} color={colors.statusAmber} fill={colors.statusAmber} /> : null}
         {othersNeedYou ? <View style={styles.alert} /> : null}
       </Pressable>
       {/* A collapsed bar's + lives in the header's ⋯ menu. */}
@@ -269,7 +292,7 @@ export function MobileSessionTabBar({
       ) : null}
       <MobileSessionTabsSheet
         controller={controller}
-        rows={rows}
+        tabs={rows}
         visible={sheetOpen}
         onClose={() => setSheetOpen(false)}
       />

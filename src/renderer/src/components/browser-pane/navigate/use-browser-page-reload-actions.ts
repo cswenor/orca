@@ -1,12 +1,11 @@
+import type { BrowserPageInitializationAction } from '../../../../../shared/browser/client-hosting/browser-page-initialization-action'
 import { useCallback, useMemo, useState, type MutableRefObject } from 'react'
-import { useShortcutLabel } from '@/hooks/useShortcutLabel'
 import { useLatestHandler } from '@/lib/use-latest-handler'
-import { useTranslate } from '@/i18n/use-translate'
-import type { BrowserPage as BrowserPageState } from '../../../../../shared/browser-workspace-types'
+import { useBrowserReloadControlLabels } from './use-browser-reload-control-labels'
+import type { BrowserPage as BrowserPageState } from '../../../../../shared/browser/workspaces/browser-workspace-types'
 import {
   type BrowserReloadTrigger,
   reloadBrowserPageWebview,
-  resolveBrowserReloadButtonLabelKind,
   resolveBrowserReloadIntent
 } from './browser-reload-action'
 import { retryBrowserTabLoad } from '../describe-page/browser-page-url-display'
@@ -14,11 +13,13 @@ import type { BrowserTabPageState } from '../describe-page/browser-page-types'
 
 export function useBrowserPageReloadActions({
   browserTab,
+  onInitializationAction,
   webviewRef,
   retryGuestRecoveryRef,
   onUpdatePageStateRef
 }: {
   browserTab: BrowserPageState
+  onInitializationAction?: (action: BrowserPageInitializationAction) => void
   webviewRef: MutableRefObject<Electron.WebviewTag | null>
   retryGuestRecoveryRef: MutableRefObject<() => void>
   onUpdatePageStateRef: MutableRefObject<(tabId: string, updates: BrowserTabPageState) => void>
@@ -26,15 +27,12 @@ export function useBrowserPageReloadActions({
   reloadWebviewOrRecoverGuest: (ignoreCache: boolean) => void
   runReloadTrigger: (trigger: BrowserReloadTrigger) => void
   reloadButtonLabel: string
-  reloadButtonLabelKind: ReturnType<typeof resolveBrowserReloadButtonLabelKind>
+  reloadButtonLabelKind: ReturnType<typeof useBrowserReloadControlLabels>['reloadButtonLabelKind']
   reloadMenuOpen: boolean
   setReloadMenuOpen: React.Dispatch<React.SetStateAction<boolean>>
   reloadShortcut: string
   hardReloadShortcut: string
 } {
-  const t = useTranslate()
-  const reloadShortcut = useShortcutLabel('browser.reload')
-  const hardReloadShortcut = useShortcutLabel('browser.hardReload')
   const [reloadMenuOpen, setReloadMenuOpen] = useState(false)
   const reloadState = useMemo(
     () => ({ loading: browserTab.loading, loadErrorCode: browserTab.loadError?.code ?? null }),
@@ -42,6 +40,10 @@ export function useBrowserPageReloadActions({
   )
   // Stable so shortcut listeners don't re-register on every page-state update.
   const reloadWebviewOrRecoverGuest = useLatestHandler((ignoreCache: boolean) => {
+    if (onInitializationAction) {
+      onInitializationAction({ type: 'navigate', url: browserTab.url })
+      return
+    }
     const webview = webviewRef.current
     if (!webview) {
       return
@@ -62,6 +64,14 @@ export function useBrowserPageReloadActions({
   })
   const runReloadTrigger = useCallback(
     (trigger: BrowserReloadTrigger) => {
+      if (onInitializationAction) {
+        onInitializationAction(
+          resolveBrowserReloadIntent(trigger, reloadState) === 'stop'
+            ? { type: 'stop' }
+            : { type: 'navigate', url: browserTab.url }
+        )
+        return
+      }
       const webview = webviewRef.current
       if (!webview) {
         return
@@ -87,6 +97,7 @@ export function useBrowserPageReloadActions({
     },
     [
       browserTab,
+      onInitializationAction,
       onUpdatePageStateRef,
       reloadState,
       reloadWebviewOrRecoverGuest,
@@ -95,22 +106,11 @@ export function useBrowserPageReloadActions({
     ]
   )
 
-  const reloadButtonLabelKind = resolveBrowserReloadButtonLabelKind(reloadState)
-  const reloadButtonLabel =
-    reloadButtonLabelKind === 'stop'
-      ? t('auto.components.browser.pane.BrowserPane.b7e4d9c1a2', 'Stop')
-      : reloadButtonLabelKind === 'retry'
-        ? t('auto.components.browser.pane.BrowserPane.781d6459ad', 'Retry')
-        : t('auto.components.browser.pane.BrowserPane.0e080d820e', 'Reload')
-
   return {
     reloadWebviewOrRecoverGuest,
     runReloadTrigger,
-    reloadButtonLabel,
-    reloadButtonLabelKind,
+    ...useBrowserReloadControlLabels(reloadState),
     reloadMenuOpen,
-    setReloadMenuOpen,
-    reloadShortcut,
-    hardReloadShortcut
+    setReloadMenuOpen
   }
 }

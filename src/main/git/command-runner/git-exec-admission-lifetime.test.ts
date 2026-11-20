@@ -1,6 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type * as GitFetchHeadLockModule from '../../../shared/git/fetch/git-fetch-head-lock'
+
+// Callback fixtures exercise native execFile; Mac spawn capture has real-child coverage.
+const restorePlatform = vi.hoisted(() => {
+  const platform = process.platform
+  if (platform === 'darwin') {
+    Object.defineProperty(process, 'platform', { value: 'linux' })
+  }
+  return () => Object.defineProperty(process, 'platform', { value: platform })
+})
+afterAll(restorePlatform)
+
+const { groupExists } = vi.hoisted(() => ({ groupExists: vi.fn(() => true) }))
 
 const {
   execFileMock,
@@ -25,6 +37,7 @@ vi.mock('./process-capture/spawned-command-tree-kill', () => ({
   killSpawnedCommandTree: killSpawnedCommandTreeMock
 }))
 vi.mock('@orca/process-host/process-tree-termination', () => ({
+  processGroupExists: groupExists,
   signalProcessTree: signalProcessTreeMock,
   forceTerminateProcessTree: forceTerminateProcessTreeMock
 }))
@@ -38,21 +51,24 @@ vi.mock('../../../shared/git/fetch/git-fetch-head-lock', async (importOriginal) 
     runWithGitFetchHeadLock: <T>(
       worktreePath: string,
       signal: AbortSignal | undefined,
-      run: () => Promise<T>
-    ): Promise<T> => runWithGitOperationLock(worktreePath, signal, run)
+      run: () => Promise<T>,
+      _explicitGitDir?: string,
+      releaseAfter?: () => Promise<void> | null
+    ): Promise<T> => runWithGitOperationLock(worktreePath, signal, run, releaseAfter)
   }
 })
 
 import { execFileCapture } from './process-capture/exec-file-capture'
+import * as captureModule from './process-capture/exec-file-capture'
+import { gitExecFileAsync } from './git-exec-file'
+import { GitCommandTimeoutError } from '../../../shared/git/commands/git-command-timeout'
 
-import {
-  _gitAdmissionSnapshotForTests,
-  _resetGitAdmissionForTests
-} from './admission/git-subprocess-admission'
+import { _resetGitAdmissionForTests } from './admission/git-subprocess-admission'
 import { GitAdmissionScheduler } from '../../../shared/git/admission/git-admission-scheduler'
 
 describe('git exec admission lifetime', () => {
   beforeEach(() => {
+    groupExists.mockReturnValue(true)
     vi.useFakeTimers()
     execFileMock.mockReset()
     spawnMock.mockReset()
@@ -63,6 +79,7 @@ describe('git exec admission lifetime', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.unstubAllEnvs()
+    vi.restoreAllMocks()
     _resetGitAdmissionForTests()
   })
 
@@ -79,5 +96,108 @@ describe('git exec admission lifetime', () => {
     ).rejects.toMatchObject({ name: 'AbortError' })
     expect(execFileMock).not.toHaveBeenCalled()
     expect(onChildTerminated).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a timed-out live checkout admitted until termination while reads proceed', async () => {
+    vi.useRealTimers()
+    const holders = Array.from({ length: 3 }, (_, index) => ({
+      name: `holder-${index}`,
+      started: Promise.withResolvers<void>(),
+      capture: Promise.withResolvers<{ stdout: string; stderr: string }>(),
+      terminate: () => {}
+    }))
+    let successorStarted = false
+    vi.spyOn(captureModule, 'execFileCapture').mockImplementation((_binary, args, options) => {
+      const holder = holders.find(({ name }) => args.includes(name))
+      if (holder) {
+        holder.terminate = () => options.onChildTerminated?.()
+        holder.started.resolve()
+        return holder.capture.promise
+      }
+      if (args.includes('successor')) {
+        successorStarted = true
+      }
+      options.onChildTerminated?.()
+      return Promise.resolve({ stdout: 'read completed', stderr: '' })
+    })
+    const checkoutOptions = {
+      cwd: process.cwd(),
+      admissionClass: 'checkout' as const,
+      admissionTier: 'interactive' as const
+    }
+    const running = holders.map(({ name }) =>
+      gitExecFileAsync(['worktree', 'add', name], checkoutOptions)
+    )
+    const timeout = expect(running[0]).rejects.toBeInstanceOf(GitCommandTimeoutError)
+    await Promise.all(holders.map(({ started }) => started.promise))
+    holders[0].capture.reject(new GitCommandTimeoutError(180_000))
+    await timeout
+    const successor = gitExecFileAsync(['worktree', 'add', 'successor'], checkoutOptions)
+    try {
+      await expect(
+        gitExecFileAsync(['rev-parse', 'HEAD'], { cwd: process.cwd() })
+      ).resolves.toEqual({
+        stdout: 'read completed',
+        stderr: ''
+      })
+      expect(successorStarted).toBe(false)
+      holders[0].terminate()
+      await successor
+      expect(successorStarted).toBe(true)
+    } finally {
+      holders.forEach((holder) => {
+        holder.capture.resolve({ stdout: '', stderr: '' })
+        holder.terminate()
+      })
+      await Promise.allSettled([...running, successor])
+    }
+  })
+
+  it('holds the Windows fetch lane after caller timeout until the child terminates', async () => {
+    vi.useRealTimers()
+    const platform = process.platform
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    const started = Promise.withResolvers<void>()
+    const captured = Promise.withResolvers<{ stdout: string; stderr: string }>()
+    let terminate = () => {}
+    let successorStarted = false
+    vi.spyOn(captureModule, 'execFileCapture').mockImplementation((_binary, args, options) => {
+      if (args.includes('first')) {
+        terminate = () => options.onChildTerminated?.()
+        started.resolve()
+        return captured.promise
+      }
+      if (args.includes('successor')) {
+        successorStarted = true
+      }
+      options.onChildTerminated?.()
+      return Promise.resolve({ stdout: 'done', stderr: '' })
+    })
+    const options = {
+      cwd: process.cwd(),
+      admissionExempt: true as const,
+      env: { ...process.env, GIT_SSH_COMMAND: 'ssh' }
+    }
+    const first = gitExecFileAsync(['fetch', 'first'], options)
+    const rejected = expect(first).rejects.toBeInstanceOf(GitCommandTimeoutError)
+    let successor: ReturnType<typeof gitExecFileAsync> | undefined
+    try {
+      await started.promise
+      captured.reject(new GitCommandTimeoutError(100))
+      await rejected
+      successor = gitExecFileAsync(['fetch', 'successor'], options)
+      await expect(
+        gitExecFileAsync(['fetch', 'unrelated'], { ...options, cwd: `${options.cwd}/other` })
+      ).resolves.toEqual({ stdout: 'done', stderr: '' })
+      expect(successorStarted).toBe(false)
+      terminate()
+      await successor
+      expect(successorStarted).toBe(true)
+    } finally {
+      terminate()
+      captured.resolve({ stdout: '', stderr: '' })
+      await Promise.allSettled([first, ...(successor ? [successor] : [])])
+      Object.defineProperty(process, 'platform', { value: platform })
+    }
   })
 })

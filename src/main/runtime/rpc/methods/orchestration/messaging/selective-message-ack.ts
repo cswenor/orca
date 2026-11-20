@@ -1,36 +1,40 @@
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import { getMessagesByIds } from '../../../../orchestration/db/messages/messages-by-id'
-import { runLifecycleWriteTransaction } from '../../../../orchestration/db/lifecycle-write-transaction-runner'
+import type { CheckMailReconciliation } from './check-mail-reconciliation'
 import { runOwnsDirectMessageSql } from '../../../../orchestration/db/runs/run-coordinator-mail-routing'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
-import { reconcileLifecycleMessage } from '../../../../orchestration/workers/lifecycle/lifecycle-reconciliation'
 import { exposeMessages } from './mailbox-message-receipt'
 import { ORCHESTRATION_LEGACY_RUN_ID } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
-import { dispatchFenced } from './dispatch-mailbox-fence'
 
-export function acknowledgeSelectedMessages(
-  db: OrchestrationDb,
-  mailbox: string,
-  ids: string[],
-  options?: {
-    recordReceipt?: (receipt: unknown) => void
-    mailboxIdentity?: { runId: string; dispatchId?: string }
-    residualMailbox?: string
-    dispatchConsumer?: { generation: number; readCurrentGeneration: () => number | undefined }
-  }
-) {
-  return runLifecycleWriteTransaction(db.db, 'selective_message_ack', () => {
-    const consumer = options?.dispatchConsumer
-    if (consumer && consumer.readCurrentGeneration() !== consumer.generation) {
-      throw dispatchFenced()
-    }
-    const selectedIds = [...new Set(ids)]
-    const rows = getMessagesByIds(db, selectedIds)
-    const messages = selectedIds.map((id) => {
+export async function acknowledgeSelectedMessages(args: {
+  db: OrchestrationDb
+  reconciliation: CheckMailReconciliation
+  mailbox: string
+  ids: string[]
+  direct: boolean
+  runId?: string
+  recordReceipt?: (receipt: unknown) => void
+  mailboxIdentity?: { runId: string; dispatchId?: string }
+  residual?: { mailbox: string; revalidate: () => void }
+  revalidateConsumer: () => void
+}) {
+  const { db, mailbox, residual } = args
+  const ids = [...new Set(args.ids)]
+  const isRunOwned = args.direct
+    ? db.db.prepare(
+        `SELECT 1 FROM messages WHERE id IN (SELECT value FROM json_each(?)) AND ${runOwnsDirectMessageSql('messages')} LIMIT 1`
+      )
+    : undefined
+  const directIdsJson = args.direct ? JSON.stringify(ids) : undefined
+  const validateSelection = () => {
+    args.revalidateConsumer()
+    const rows = getMessagesByIds(db, ids)
+    const messages = ids.map((id) => {
       const message = rows.get(id)
       if (
         !message ||
-        (message.to_handle !== mailbox && message.to_handle !== options?.residualMailbox)
+        (message.to_handle !== mailbox && message.to_handle !== residual?.mailbox) ||
+        (args.runId !== undefined && message.run_id !== args.runId)
       ) {
         throw new OrchestrationError(
           'invalid_argument',
@@ -50,36 +54,49 @@ export function acknowledgeSelectedMessages(
       }
       return message
     })
-    if (
-      !mailbox.startsWith('run:') &&
-      !mailbox.startsWith('dispatch:') &&
-      db.db
-        .prepare(
-          `SELECT 1 FROM messages WHERE id IN (SELECT value FROM json_each(?)) AND ${runOwnsDirectMessageSql('messages')} LIMIT 1`
-        )
-        .get(JSON.stringify(selectedIds))
-    ) {
+    if (directIdsJson !== undefined && isRunOwned?.get(directIdsJson)) {
       throw new OrchestrationError(
         'consumer_fenced',
         'Selected mail belongs to a Run. Acknowledge it from that Run consumer.',
         { effectsApplied: false }
       )
     }
-    const unread = messages.filter((message) => message.read === 0)
-    for (const message of unread) {
-      reconcileLifecycleMessage(db, message)
+    if (residual && messages.some((message) => message.to_handle === residual.mailbox)) {
+      residual.revalidate()
     }
-    const markedIds = unread.map((message) => message.id)
-    db.markAsRead(markedIds)
-    const result = {
-      ...options?.mailboxIdentity,
-      messages: exposeMessages(markedIds.map((id) => db.getMessageById(id)!)),
-      count: markedIds.length,
-      acknowledged: null,
-      markedIds,
-      alreadyReadIds: messages.filter((message) => message.read === 1).map((message) => message.id)
-    }
-    options?.recordReceipt?.(result)
-    return result
+    return messages
+  }
+  const selected = validateSelection()
+  return args.reconciliation.takeSelected({
+    selected: selected.filter((message) => message.read === 0),
+    direct: args.direct,
+    revalidate: () => {
+      const current = validateSelection()
+      // A routed row no longer belongs to the observed custody source.
+      if (
+        current.some(
+          (row, i) =>
+            row.to_handle !== selected[i]?.to_handle || row.run_id !== selected[i]?.run_id
+        )
+      ) {
+        throw new OrchestrationError(
+          'consumer_fenced',
+          'Selected mail moved while acknowledging it. No messages were acknowledged.',
+          { effectsApplied: false }
+        )
+      }
+    },
+    respond: (messages) => {
+      const marked = new Set(messages.map((message) => message.id))
+      return {
+        ...args.mailboxIdentity,
+        messages: exposeMessages(messages.map((message) => ({ ...message, read: 1 }))),
+        count: messages.length,
+        acknowledged: null,
+        markedIds: [...marked],
+        alreadyReadIds: ids.filter((id) => !marked.has(id))
+      }
+    },
+    record: args.recordReceipt
   })
 }

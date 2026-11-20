@@ -48,6 +48,57 @@ it('acknowledges only selected recipient IDs, atomically rejects mixed recipient
   expect(db.getUnreadMessages('term_other').map((message) => message.id)).toEqual(['msg_foreign'])
 })
 
+it('keeps a bound Run selection separate from explicit unbound direct mail', async () => {
+  const { db, ctx } = harness.setup(false)
+  const { id: activeRunId } = db.createRun({
+    objective: 'Test Run',
+    coordinatorHandle: 'term_coord',
+    coordinatorPaneKey: harness.coordinatorPaneKey
+  })
+  const acknowledge = (ackIds: string[], run?: string) =>
+    harness.call('orchestration.ackMessages', { terminal: 'term_coord', ackIds, run }, ctx)
+  db.insertMessage({
+    id: 'msg_run_selected',
+    from: 'term_child',
+    to: `run:${activeRunId}`,
+    runId: activeRunId,
+    subject: 'selected Run status'
+  })
+  db.insertMessage({
+    id: 'msg_run_owned_direct',
+    from: 'term_child',
+    to: 'term_coord',
+    runId: activeRunId,
+    subject: 'unselected Run-owned direct mail'
+  })
+  db.insertMessage({
+    id: 'msg_unbound',
+    from: 'term_child',
+    to: 'term_coord',
+    subject: 'unbound direct mail'
+  })
+
+  await expect(acknowledge(['msg_run_selected', 'msg_unbound'])).rejects.toMatchObject({
+    code: 'invalid_argument'
+  })
+  expect(db.getMessageById('msg_run_selected')?.read).toBe(0)
+  await expect(acknowledge(['msg_run_selected'])).resolves.toMatchObject({
+    markedIds: ['msg_run_selected']
+  })
+  expect(db.getMessageById('msg_run_owned_direct')).toMatchObject({
+    to_handle: 'term_coord',
+    read: 0
+  })
+  expect(db.getMessageById('msg_unbound')?.read).toBe(0)
+  await expect(
+    acknowledge(['msg_unbound', 'msg_run_owned_direct'], 'run_unbound')
+  ).rejects.toMatchObject({ code: 'invalid_argument' })
+  expect(db.getMessageById('msg_unbound')?.read).toBe(0)
+  await expect(acknowledge(['msg_unbound'], 'run_unbound')).resolves.toMatchObject({
+    markedIds: ['msg_unbound']
+  })
+})
+
 it('selectively acknowledges pre-bind Dispatch mail without disturbing an outstanding Run delivery', async () => {
   const { db, runtime, ctx } = harness.setup()
   const pane = 'tab_lead:22222222-2222-4222-9222-222222222222'

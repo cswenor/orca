@@ -1,10 +1,10 @@
 import { MessageChannel, type MessagePort } from 'node:worker_threads'
 import { afterEach, expect, it, vi } from 'vitest'
-import { BackendPortRpc, type BackendPort } from '../../../../../shared/backend-port-rpc'
+import { BackendPortRpc, type BackendPort } from '../../../../../shared/backend/backend-port-rpc'
 import {
   BACKEND_CONNECTION_CHANGED,
   BACKEND_PORT_DELIVERY
-} from '../../../../../shared/backend-service-contract'
+} from '../../../../../shared/backend/backend-service-contract'
 
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => void>(),
@@ -44,7 +44,11 @@ function deliver(invoke: (method: string, params?: unknown) => Promise<unknown>)
     close: () => channel.port1.close()
   }
   servers.push(new BackendPortRpc(adapter, 'backend', invoke))
-  emit(BACKEND_PORT_DELIVERY, { token: electron.invoke.mock.lastCall?.[1] }, [channel.port2])
+  emit(
+    BACKEND_PORT_DELIVERY,
+    { token: electron.invoke.mock.lastCall?.[1], incarnation: 'backend' },
+    [channel.port2]
+  )
   const close = added.mock.calls.find(([event]) => event === 'close')?.[1]
   return () => {
     if (typeof close === 'function') {
@@ -68,7 +72,7 @@ afterEach(() => {
 
 it('publishes port loss before rejection and preserves fresh work through duplicate loss', async () => {
   const { backendUsageTransport: transport } =
-    await import('../../../../../preload/backend-port-client')
+    await import('../../../../../preload/usage/backend-port-client')
   const events: string[] = []
   let fresh: Promise<unknown> | undefined
   detach.push(
@@ -108,7 +112,7 @@ it('publishes port loss before rejection and preserves fresh work through duplic
 
 it('keeps a replacement handshake when the old handshake rejects after loss', async () => {
   const { backendUsageTransport: transport } =
-    await import('../../../../../preload/backend-port-client')
+    await import('../../../../../preload/usage/backend-port-client')
   let fresh: Promise<unknown> | undefined
   detach.push(
     transport.onConnectionChanged((connected, detail) => {
@@ -132,7 +136,7 @@ it('keeps a replacement handshake when the old handshake rejects after loss', as
 
 it('initializes terminal presentation without RPCs and preserves a fresh handshake through terminal escalation', async () => {
   const { backendUsageTransport: transport } =
-    await import('../../../../../preload/backend-port-client')
+    await import('../../../../../preload/usage/backend-port-client')
   emit(BACKEND_CONNECTION_CHANGED, { connected: false })
   const fresh = transport.invoke('snapshot')
   emit(BACKEND_CONNECTION_CHANGED, { connected: false, unavailable: true })
@@ -149,7 +153,7 @@ it('initializes terminal presentation without RPCs and preserves a fresh handsha
 
 it('promotes pending recovery once and ignores its stale delivery and rejection', async () => {
   const { backendUsageTransport: transport } =
-    await import('../../../../../preload/backend-port-client')
+    await import('../../../../../preload/usage/backend-port-client')
   const old = Promise.withResolvers<void>()
   electron.invoke.mockImplementationOnce(() => old.promise)
   const recovery = transport.invoke('snapshot', undefined, 'recovery')
@@ -176,7 +180,7 @@ it('promotes pending recovery once and ignores its stale delivery and rejection'
 
 it('cancels pending recovery on loss without rearming, and admits fresh post-loss demand', async () => {
   const { backendUsageTransport: transport } =
-    await import('../../../../../preload/backend-port-client')
+    await import('../../../../../preload/usage/backend-port-client')
   const old = Promise.withResolvers<void>()
   electron.invoke.mockImplementationOnce(() => old.promise)
   const recovery = transport.invoke('snapshot', undefined, 'recovery')

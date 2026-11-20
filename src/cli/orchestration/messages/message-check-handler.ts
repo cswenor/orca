@@ -5,8 +5,8 @@ import { withReceiptNext } from '../receipt-next-text'
 import { printOrchestrationResult } from '../agent-view'
 import { checkView } from './message-agent-views'
 import { getOptionalStringFlag, getPresentStringFlag } from '../../arguments/flags'
-import { RuntimeClientError } from '../../runtime/types'
-import type { RuntimeRpcSuccess } from '../../../shared/runtime-rpc-envelope'
+import { RuntimeClientError } from '../../runtime/connection/types'
+import type { RuntimeRpcSuccess } from '../../../shared/remote-runtime/rpc/runtime-rpc-envelope'
 import {
   formatOrchestrationCheckText,
   prepareOrchestrationCheckOutput,
@@ -24,8 +24,8 @@ import {
   orchestrationCallerLabel,
   resolveOrchestrationTerminalHandle
 } from '../identity/terminal-identity'
-import type { RuntimeStatus } from '../../../shared/runtime-types'
-import { CheckParams } from '../../../shared/rpc-contract/orchestration-params'
+import type { RuntimeStatus } from '../../../shared/remote-runtime/session-graph/runtime-session-contracts'
+import { CheckParams } from '../../../shared/rpc-contract/orchestration/orchestration-params'
 import { ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY } from '../../../shared/orchestration/orchestration-runtime-capabilities'
 
 type CheckResult = {

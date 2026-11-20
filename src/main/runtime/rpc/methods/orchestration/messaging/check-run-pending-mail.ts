@@ -4,11 +4,15 @@ import type { OrcaRuntimeService } from '../../../../orca-runtime'
 import { interruptedAcknowledgedCheck } from '../routing'
 import { checkWorkerMailbox } from './check-worker'
 import { acknowledgedOnlyReceipt, handsOverBatch } from './mailbox-message-receipt'
+import type { CheckMailReconciliation } from './check-mail-reconciliation'
 import { currentDispatchAssigneeRun } from './recipient-routing'
 import { callerHoldsDispatchPane, dispatchFenced } from './dispatch-mailbox-fence'
 import { orchestrationCallerIdentity } from '../runs/run-scope'
-import type { OrchestrationEntryCaller } from '../../../../orchestration/addressing/orchestration-caller-identity'
-import type { CheckParams } from '../../../../../../shared/rpc-contract/orchestration-params'
+import type {
+  OrchestrationEntryCaller,
+  OrchestrationSessionCaller
+} from '../../../../orchestration/addressing/orchestration-caller-identity'
+import type { CheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 import type { z } from 'zod'
 import { acknowledgeSelectedMessages } from './selective-message-ack'
 
@@ -20,9 +24,11 @@ export async function checkRunPendingMail(args: {
   handle: string
   paneKey: string | undefined
   callerSession: OrchestrationEntryCaller | undefined
+  reader: OrchestrationSessionCaller | undefined
   typeFilter: MessageType[] | undefined
   signal: AbortSignal | undefined
   revalidateConsumer: () => void
+  reconciliation: CheckMailReconciliation
   recordMutationReceipt: ((receipt: unknown) => void) | undefined
 }): Promise<{ acknowledged?: string; result?: unknown }> {
   const {
@@ -68,10 +74,32 @@ export async function checkRunPendingMail(args: {
   if (params.ackIds) {
     revalidateConsumer()
     return {
-      result: acknowledgeSelectedMessages(db, address, params.ackIds, {
+      result: await acknowledgeSelectedMessages({
+        db,
+        reconciliation: args.reconciliation,
+        mailbox: address,
+        ids: params.ackIds,
+        direct: false,
         mailboxIdentity: { runId: run.id },
         recordReceipt: recordMutationReceipt,
-        residualMailbox: residual && ownsResidual() ? `dispatch:${residual.id}` : undefined
+        revalidateConsumer,
+        residual:
+          residual && ownsResidual()
+            ? {
+                mailbox: `dispatch:${residual.id}`,
+                revalidate: () => {
+                  const current = db.getActiveDispatchForIdentity(handle, paneKey)
+                  if (
+                    current?.id !== residual.id ||
+                    current.consumer_generation !== residual.consumer_generation ||
+                    !callerHoldsDispatchPane(current, paneKey) ||
+                    currentDispatchAssigneeRun(runtime, db, current)?.id !== run.id
+                  ) {
+                    throw dispatchFenced()
+                  }
+                }
+              }
+            : undefined
       })
     }
   }
@@ -101,6 +129,7 @@ export async function checkRunPendingMail(args: {
   if (residual && ownsResidual()) {
     const result = await checkWorkerMailbox({
       params: { ...params, ack: residualAck, wait: false },
+      reader: args.reader,
       runtime,
       db,
       handle,
@@ -124,6 +153,7 @@ export async function checkRunPendingMail(args: {
         }
       },
       recordMutationReceipt,
+      reconciliation: args.reconciliation,
       runAcknowledged: acknowledged?.delivery.id,
       acknowledgeOnly: !params.wait
     })

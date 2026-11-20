@@ -26,6 +26,8 @@ Every ID must exist in the caller's current mailbox (direct, bound Run or
 Dispatch); an unknown, foreign or legacy ID rejects the entire selection.
 An implicitly bound child Run can also acknowledge pre-bind Dispatch mail while
 it remains that Dispatch's current consumer, even with an outstanding Run delivery.
+A bound Run selection never includes the caller's own direct mail. To select
+only unbound direct mail, specify `--run run_unbound`.
 The response and its durable retry receipt retain the Run/Dispatch identity.
 Existing consumer/pane fencing still
 applies: reattachment rejects the replaced consumer's selection even on the same
