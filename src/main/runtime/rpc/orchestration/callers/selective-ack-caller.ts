@@ -48,6 +48,7 @@ export function assertSelectiveAckCaller(
       { effectsApplied: false }
     )
   }
+  return undefined
 }
 
 export function assertSelectiveAckDispatchProcess(
