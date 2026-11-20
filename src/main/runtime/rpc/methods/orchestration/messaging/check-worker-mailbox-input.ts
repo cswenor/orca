@@ -3,17 +3,15 @@ import type { OrchestrationDb } from '../../../../orchestration/db/orchestration
 import type { OrcaRuntimeService } from '../../../../orca-runtime'
 import type { CheckMailReconciliation } from './check-mail-reconciliation'
 import type { OrchestrationSessionCaller } from '../../../../orchestration/addressing/orchestration-caller-identity'
-import type { CheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
-import type { z } from 'zod'
+import type { MailboxCheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 
-type CheckParamsInput = z.infer<typeof CheckParams>
 type ActiveDispatch = NonNullable<ReturnType<OrchestrationDb['getActiveDispatchForIdentity']>>
 type RemoteAttachment = NonNullable<
   ReturnType<OrchestrationDb['findActiveRemoteAttachmentForPane']>
 >
 
 export type WorkerMailboxCheckInput = {
-  params: CheckParamsInput
+  params: MailboxCheckParams
   runtime: OrcaRuntimeService
   db: OrchestrationDb
   handle: string

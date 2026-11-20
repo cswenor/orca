@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY } from '../../../shared/orchestration/orchestration-runtime-capabilities'
+import { RuntimeClientError } from '../../runtime/connection/types'
 
 const callMock = vi.hoisted(() => vi.fn())
 const getTerminalHandleMock = vi.hoisted(() => vi.fn())
@@ -48,17 +50,57 @@ describe('orchestration check identity', () => {
     expect(callMock.mock.calls.map(([method]) => method)).toEqual(['status.get'])
   })
 
-  it('rejects --ack-ids with --wait before contacting the runtime', async () => {
-    await expect(
-      invokeCheck(
-        new Map<string, string | boolean>([
-          ['ack-ids', 'msg_selected'],
-          ['wait', true]
-        ])
-      )
-    ).rejects.toThrow()
-    expect(callMock).not.toHaveBeenCalled()
-  })
+  it.each([
+    ['wait', true],
+    ['ack', ''],
+    ['types', ''],
+    ['timeout-ms', '']
+  ])(
+    'rejects --ack-ids with explicitly supplied --%s before contacting the runtime',
+    async (flag, value) => {
+      await expect(
+        invokeCheck(
+          new Map<string, string | boolean>([
+            ['ack-ids', 'msg_selected'],
+            [flag, value]
+          ])
+        )
+      ).rejects.toMatchObject({ code: 'invalid_argument' })
+      expect(callMock).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([true, false])(
+    'never falls back to ordinary check (distinct method present: %s)',
+    async (available) => {
+      process.env.ORCA_TERMINAL_HANDLE = 'term_coord'
+      callMock.mockResolvedValueOnce({
+        result: { capabilities: [ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY] }
+      })
+      if (available) {
+        callMock.mockResolvedValueOnce({ result: { markedIds: ['msg_selected'] } })
+      } else {
+        callMock.mockRejectedValueOnce(
+          new RuntimeClientError('method_not_found', 'Unknown RPC method')
+        )
+      }
+      const outcome = invokeCheck(new Map([['ack-ids', 'msg_selected']]))
+      if (available) {
+        await outcome
+        expect(printResultMock).toHaveBeenCalledWith(
+          { result: { markedIds: ['msg_selected'] } },
+          true,
+          expect.any(Function)
+        )
+      } else {
+        await expect(outcome).rejects.toMatchObject({ code: 'method_not_found' })
+      }
+      expect(callMock.mock.calls.map(([method]) => method)).toEqual([
+        'status.get',
+        'orchestration.ackMessages'
+      ])
+    }
+  )
 
   it('rejects an empty --terminal instead of consuming the ambient mailbox', async () => {
     process.env.ORCA_TERMINAL_HANDLE = 'term_coord'

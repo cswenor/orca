@@ -8,13 +8,10 @@ import type { OrchestrationSessionCaller } from '../../../../orchestration/addre
 import { withReplyFollowUps, exposeMessages } from './mailbox-message-receipt'
 import { staleDelivery } from '../../../../orchestration/db/messages/role-mailbox-delivery'
 import { ORCHESTRATION_LEGACY_RUN_ID } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
-import type { CheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
-import type { z } from 'zod'
-
-type CheckParamsInput = z.infer<typeof CheckParams>
+import type { MailboxCheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 
 export async function checkDirectMailbox(args: {
-  params: CheckParamsInput
+  params: MailboxCheckParams
   runtime: OrcaRuntimeService
   db: OrchestrationDb
   handle: string

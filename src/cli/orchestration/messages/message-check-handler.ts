@@ -25,7 +25,7 @@ import {
   resolveOrchestrationTerminalHandle
 } from '../identity/terminal-identity'
 import type { RuntimeStatus } from '../../../shared/remote-runtime/session-graph/runtime-session-contracts'
-import { CheckParams } from '../../../shared/rpc-contract/orchestration/orchestration-params'
+import { AckMessagesParams } from '../../../shared/rpc-contract/orchestration/orchestration-params'
 import { ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY } from '../../../shared/orchestration/orchestration-runtime-capabilities'
 
 type CheckResult = {
@@ -53,14 +53,25 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
       ?.split(',')
       .map((id) => id.trim())
     if (ackIds) {
-      CheckParams.parse({
-        ackIds,
-        ...Object.fromEntries(
-          ['ack', 'unread', 'peek', 'all', 'types', 'format', 'inject', 'wait', 'timeout-ms']
-            .filter((flag) => flags.has(flag))
-            .map((flag) => [flag === 'timeout-ms' ? 'timeoutMs' : flag, flags.get(flag)])
+      const incompatible = [
+        'ack',
+        'unread',
+        'peek',
+        'all',
+        'types',
+        'format',
+        'inject',
+        'full',
+        'wait',
+        'timeout-ms'
+      ].find((flag) => flags.has(flag))
+      if (incompatible) {
+        throw new RuntimeClientError(
+          'invalid_argument',
+          `--ack-ids cannot be combined with --${incompatible}.`
         )
-      })
+      }
+      AckMessagesParams.parse({ ackIds })
       const status = await client.call<RuntimeStatus>('status.get')
       if (!status.result.capabilities?.includes(ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY)) {
         throw new RuntimeClientError(
@@ -82,36 +93,18 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
     // Sessions use their injected id; inherited pane keys belong to a different caller.
     const paneKey =
       explicitTerminal || terminal === undefined ? undefined : process.env.ORCA_PANE_KEY
-    const callerLabel = orchestrationCallerLabel(terminal)
-    const stopKeepalive = wait ? startCheckKeepalive(timeoutMs) : null
-    let result: Awaited<ReturnType<typeof client.call<CheckResult>>>
-    try {
-      result = await callOrchestrationMutation<CheckResult>(
+    if (ackIds) {
+      const result = await callOrchestrationMutation<CheckResult>(
         client,
         flags,
-        ackIds ? 'orchestration.ackMessages' : 'orchestration.check',
+        'orchestration.ackMessages',
         {
           terminal,
           terminalPaneKey: paneKey || undefined,
-          // unread:false makes hosts that ignore peek fall back to non-consuming all mode.
-          unread: flags.has('unread') ? true : peek ? false : undefined,
-          peek: peek ? true : undefined,
-          all: flags.has('all') ? true : undefined,
-          types: getOptionalStringFlag(flags, 'types'),
-          format: flags.has('format') ? true : undefined,
-          inject: flags.has('inject') ? true : undefined,
-          compatibilityCliCommand: resolveCompatibilityCliCommand(),
-          run: getOptionalStringFlag(flags, 'run'),
-          ack: getOptionalStringFlag(flags, 'ack'),
-          ackIds,
-          wait: wait ? true : undefined,
-          timeoutMs
+          run: getPresentStringFlag(flags, 'run'),
+          ackIds
         }
       )
-    } finally {
-      stopKeepalive?.()
-    }
-    if (ackIds) {
       printResult(
         result,
         json,
@@ -119,6 +112,29 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
           `Marked read: ${value.markedIds?.join(', ') || '(none)'}\nAlready read: ${value.alreadyReadIds?.join(', ') || '(none)'}`
       )
       return
+    }
+    const callerLabel = orchestrationCallerLabel(terminal)
+    const stopKeepalive = wait ? startCheckKeepalive(timeoutMs) : null
+    let result: Awaited<ReturnType<typeof client.call<CheckResult>>>
+    try {
+      result = await callOrchestrationMutation<CheckResult>(client, flags, 'orchestration.check', {
+        terminal,
+        terminalPaneKey: paneKey || undefined,
+        // unread:false makes hosts that ignore peek fall back to non-consuming all mode.
+        unread: flags.has('unread') ? true : peek ? false : undefined,
+        peek: peek ? true : undefined,
+        all: flags.has('all') ? true : undefined,
+        types: getOptionalStringFlag(flags, 'types'),
+        format: flags.has('format') ? true : undefined,
+        inject: flags.has('inject') ? true : undefined,
+        compatibilityCliCommand: resolveCompatibilityCliCommand(),
+        run: getOptionalStringFlag(flags, 'run'),
+        ack: getOptionalStringFlag(flags, 'ack'),
+        wait: wait ? true : undefined,
+        timeoutMs
+      })
+    } finally {
+      stopKeepalive?.()
     }
     if (peek) {
       result = filterLegacyPeekResult(result, wait)

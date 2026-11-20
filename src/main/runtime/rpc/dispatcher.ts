@@ -206,28 +206,28 @@ export class RpcDispatcher {
     options: RpcDispatchStreamingOptions | undefined
   ): Promise<unknown> {
     const { runtime, orchestrationMutations, legacyOrchestration, pinnedCallerScope: scope } = this
+    const { method: name, params: rawParams } = request
+    const selectiveAck = isSelectiveAckRequest(request)
     const context = guardedRpcCallContext(runtime, request, options, scope, caller, params)
     // Runtime test fakes may omit client-hosted browser routing.
     const clientHostedBrowser = await (runtime.routeClientHostedBrowserRpc?.(
-      request.method,
+      name,
       params,
       context.caller
     ) ?? { handled: false as const })
     if (clientHostedBrowser.handled) {
       recordRuntimeFeatureInteraction(
         runtime,
-        request.method,
+        name,
         clientHostedBrowser.result,
         undefined,
-        request.params
+        rawParams
       )
       return clientHostedBrowser.result
     }
-    const desktopBrowser = await (runtime.routeDesktopBrowserBridgeRpc?.(
-      request.method,
-      params,
-      context
-    ) ?? { handled: false as const })
+    const desktopBrowser = await (runtime.routeDesktopBrowserBridgeRpc?.(name, params, context) ?? {
+      handled: false as const
+    })
     if (desktopBrowser.handled) {
       return desktopBrowser.result
     }
@@ -245,27 +245,23 @@ export class RpcDispatcher {
       request,
       compatibility.legacyCoordinatorAuthority
     )
-    // Before this Orca's receipts: the server that owns the worker keeps the receipt, under the caller's scoped key.
-    const remote = await routeRemoteOwnedCall(runtime, method, request, effectiveParams, {
-      ...context,
-      orchestrationCompatibilityEvidence: request.orchestrationCompatibilityEvidence
-    })
-    if (remote.handled) {
-      recordRuntimeFeatureInteraction(
-        runtime,
-        request.method,
-        remote.result,
-        undefined,
-        request.params
-      )
+    // A selective acknowledgment belongs to its verified execution-host caller, not a peer Run.
+    const remote = selectiveAck
+      ? undefined
+      : await routeRemoteOwnedCall(runtime, method, request, effectiveParams, {
+          ...context,
+          orchestrationCompatibilityEvidence: request.orchestrationCompatibilityEvidence
+        })
+    if (remote?.handled) {
+      recordRuntimeFeatureInteraction(runtime, name, remote.result, undefined, rawParams)
       return remote.result
     }
     // A legacy coordinator fingerprint outranks the transport identity; mint a fallback only when absent.
     const fallbackCallerFingerprint =
       context.authenticatedCallerFingerprint ??
       (!legacyCoordinator &&
-      !isSelectiveAckRequest(request) &&
-      (request.method.startsWith('orchestration.federation') ||
+      !selectiveAck &&
+      (name.startsWith('orchestration.federation') ||
         (!!request.orchestrationRequestId && isDurableMutation(request.method, effectiveParams)))
         ? orchestrationMutations.getLocalAuthenticatedCallerFingerprint()
         : undefined)
@@ -302,7 +298,10 @@ export class RpcDispatcher {
       callerFingerprint,
       context.orchestrationCaller
     )
-    if (request.method.startsWith('orchestration.')) {
+    if (selectiveAck) {
+      return result
+    }
+    if (name.startsWith('orchestration.')) {
       queueMicrotask(async () => {
         try {
           await runtime.refreshAgentSenderAssociations?.()
@@ -311,7 +310,7 @@ export class RpcDispatcher {
         }
       })
     }
-    recordRuntimeFeatureInteraction(runtime, request.method, result, undefined, request.params)
+    recordRuntimeFeatureInteraction(runtime, name, result, undefined, rawParams)
     return result
   }
 

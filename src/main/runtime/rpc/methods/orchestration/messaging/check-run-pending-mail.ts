@@ -12,12 +12,11 @@ import type {
   OrchestrationEntryCaller,
   OrchestrationSessionCaller
 } from '../../../../orchestration/addressing/orchestration-caller-identity'
-import type { CheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
-import type { z } from 'zod'
+import type { MailboxCheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 import { assertSelectiveAckDispatchProcess } from '../../../orchestration/callers/selective-ack-caller'
 
 export async function checkRunPendingMail(args: {
-  params: z.infer<typeof CheckParams>
+  params: MailboxCheckParams
   runtime: OrcaRuntimeService
   db: OrchestrationDb
   run: RunRow

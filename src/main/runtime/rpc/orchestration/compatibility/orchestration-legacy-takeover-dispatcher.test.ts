@@ -151,9 +151,12 @@ function request(
   }
 }
 
-it.each(['orchestration.ackMessages', 'orchestration.check'])(
+it.each([
+  ['orchestration.ackMessages', 'legacy_read_only'],
+  ['orchestration.check', 'invalid_argument']
+])(
   'rejects a retained legacy caller before %s can select unbound direct mail',
-  async (method) => {
+  async (method, code) => {
     const { db, runtime, dispatcher } = createHarness()
     vi.spyOn(runtime, 'getLiveTerminalPaneKey').mockReturnValue(WORKER_PANE)
     vi.spyOn(runtime, 'getTerminalProcessIncarnation').mockReturnValue('process-1')
@@ -173,7 +176,7 @@ it.each(['orchestration.ackMessages', 'orchestration.check'])(
       )
     ).resolves.toMatchObject({
       ok: false,
-      error: { code: 'legacy_read_only', data: { effectsApplied: false } }
+      error: { code, data: { effectsApplied: false } }
     })
     expect(db.getMessageById(mail.id)?.read).toBe(0)
   }
@@ -201,7 +204,8 @@ describe('legacy compatibility after explicit takeover', () => {
     ).resolves.toMatchObject({
       ok: false,
       error: {
-        code: 'legacy_read_only',
+        code: 'invalid_argument',
+        message: expect.stringContaining('orchestration.ackMessages'),
         data: { effectsApplied: false }
       }
     })

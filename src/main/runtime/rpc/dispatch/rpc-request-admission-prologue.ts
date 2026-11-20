@@ -60,6 +60,24 @@ export function admitRpcRequest<M extends RpcMethod | RpcStreamingMethod>(
   if (migrationFence) {
     return reject(migrationFence)
   }
+  // Reject the unsupported alias before parsing can strip it or legacy routing can consume mail.
+  const { params } = rawRequest
+  if (
+    rawRequest.method === 'orchestration.check' &&
+    params &&
+    typeof params === 'object' &&
+    'ackIds' in params
+  ) {
+    return reject(
+      errorResponse(
+        rawRequest.id,
+        meta,
+        'invalid_argument',
+        'Use orchestration.ackMessages for selective acknowledgment.',
+        { effectsApplied: false }
+      )
+    )
+  }
 
   let peer: ReturnType<typeof admitOrchestrationPeerCall>
   try {

@@ -5,14 +5,8 @@ import { sessionIdFromStructuredWorkerIncarnation } from '../../../orchestration
 import type { OrcaRuntimeService } from '../../../orca-runtime'
 import type { RpcRequest } from '../../core'
 
-export function isSelectiveAckRequest({ method, params }: RpcRequest): boolean {
-  return (
-    method === 'orchestration.ackMessages' ||
-    (method === 'orchestration.check' &&
-      !!params &&
-      typeof params === 'object' &&
-      'ackIds' in params)
-  )
+export function isSelectiveAckRequest({ method }: RpcRequest): boolean {
+  return method === 'orchestration.ackMessages'
 }
 
 export function selectiveAckPeerError(): OrchestrationError {
@@ -33,11 +27,20 @@ export function assertSelectiveAckCaller(
     throw selectiveAckPeerError()
   }
   const lease = caller?.revalidateAckLease?.()
+  if (lease) {
+    return lease
+  }
+  // General pane/process lookups can include a relay-only SSH attachment, not a hosted PTY.
+  const authority =
+    process && !sessionIdFromStructuredWorkerIncarnation(process)
+      ? runtime.getOrchestrationDispatchAuthority(handle)
+      : null
   if (
-    !lease &&
-    (!process ||
-      sessionIdFromStructuredWorkerIncarnation(process) ||
-      !runtime.getLiveTerminalPaneKey(handle))
+    !authority ||
+    authority.terminalHandle !== handle ||
+    !authority.ptyId ||
+    !authority.paneKey ||
+    authority.processIncarnation !== process
   ) {
     throw new OrchestrationError(
       'consumer_fenced',
@@ -45,7 +48,6 @@ export function assertSelectiveAckCaller(
       { effectsApplied: false }
     )
   }
-  return lease
 }
 
 export function assertSelectiveAckDispatchProcess(

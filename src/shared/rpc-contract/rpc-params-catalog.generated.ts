@@ -640,6 +640,7 @@ import {
   RunStopParams
 } from './orchestration/orchestration-gates-params'
 import {
+  AckMessagesParams,
   AskParams,
   CheckParams,
   DispatchParams,
@@ -1820,7 +1821,7 @@ export const RPC_PARAMS_BY_METHOD = {
   'orcad.migration.stageCatalog': OrcadMigrationCatalogParams,
   'orcad.migration.stageSnapshotChunk': OrcadMigrationSnapshotChunkRequestSchema,
   'orcad.terminalCensus': OrcadTerminalCensusParamsSchema,
-  'orchestration.ackMessages': CheckParams,
+  'orchestration.ackMessages': AckMessagesParams,
   'orchestration.approvalAnswer': ApprovalAnswerParams,
   'orchestration.ask': AskParams,
   'orchestration.callerShow': null,

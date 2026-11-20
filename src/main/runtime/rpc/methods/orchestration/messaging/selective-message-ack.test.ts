@@ -207,82 +207,138 @@ it.each([undefined, 'pty:prior'])(
   }
 )
 
-it.each(['orchestration.ackMessages', 'orchestration.check'])(
-  'only writes read state and a receipt when %s accepts the selection',
-  async (method) => {
-    const { db, runtime } = harness.setup(false)
-    const selected = db.insertMessage({ from: 'sender', to: 'term_coord', subject: 'unread' })
-    db.db
-      .prepare(
-        `UPDATE messages
-         SET pointer_enter_pending = 1, pointer_pty_id = 'pty-original',
-             pointer_process_incarnation = 'process-original'
-         WHERE id = ?`
-      )
-      .run(selected.id)
-    const original = db.getMessageById(selected.id)
-    const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
-    const request = {
-      id: 'rpc_ack',
-      authToken: 'test',
-      method,
-      params: { terminal: 'term_coord', ackIds: [selected.id] },
-      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION
-    }
-    await expect(dispatcher.dispatch(request)).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'invalid_argument' }
-    })
-    const ack = {
-      ...request,
-      orchestrationRequestId: 'selected-request',
-      orchestrationCompatibilityEvidence: {
-        terminalHandle: 'term_coord',
-        paneKey: harness.coordinatorPaneKey
-      }
-    }
-    await expect(
-      dispatcher.dispatch({
-        ...ack,
-        orchestrationCompatibilityEvidence: { terminalHandle: 'term_other' }
-      })
-    ).resolves.toMatchObject({ ok: false, error: { code: 'consumer_fenced' } })
-    expect(db.readLocalMutationCallerFingerprint()).toBeUndefined()
-    const fingerprint = db.getOrCreateLocalMutationCallerFingerprint()
-    db.db
-      .prepare(
-        `INSERT INTO mutation_receipts
-         (caller_fingerprint, request_id, method, payload_hash, state, receipt, updated_at)
-         VALUES (?, 'expired-request', 'orchestration.send', 'payload', 'completed', '{}', '2000-01-01')`
-      )
-      .run(fingerprint)
-    const expired = db.getMutationReceipt(fingerprint, 'expired-request')
-    await expect(
-      dispatcher.dispatch({
-        ...ack,
-        params: { ...ack.params, ackIds: [selected.id, 'msg_missing'] }
-      })
-    ).resolves.toMatchObject({ ok: false, error: { code: 'invalid_argument' } })
-    expect(db.getMutationReceipt(fingerprint, 'expired-request')).toEqual(expired)
-    expect(db.getMutationReceipt(fingerprint, ack.orchestrationRequestId)).toBeUndefined()
-    expect(db.getMessageById(selected.id)).toEqual(original)
-
-    const results = await Promise.all([dispatcher.dispatch(ack), dispatcher.dispatch(ack)])
-    for (const replayed of [true, false]) {
-      expect(results).toContainEqual(
-        expect.objectContaining({
-          ok: true,
-          result: expect.objectContaining({
-            markedIds: [selected.id],
-            mutation: expect.objectContaining({ replayed })
-          })
-        })
-      )
-    }
-    expect(db.getMessageById(selected.id)).toEqual({ ...original, read: 1 })
-    expect(db.getMutationReceipt(fingerprint, ack.orchestrationRequestId)?.state).toBe('completed')
+it('only writes read state and a receipt, including on dispatcher replay', async () => {
+  const { db, runtime } = harness.setup(false)
+  const selected = db.insertMessage({ from: 'sender', to: 'term_coord', subject: 'unread' })
+  db.db
+    .prepare(
+      `UPDATE messages
+       SET pointer_enter_pending = 1, pointer_pty_id = 'pty-original',
+           pointer_process_incarnation = 'process-original'
+       WHERE id = ?`
+    )
+    .run(selected.id)
+  const original = db.getMessageById(selected.id)
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+  const refreshSenders = vi
+    .spyOn(runtime, 'refreshAgentSenderAssociations')
+    .mockResolvedValue(undefined)
+  const recordInteraction = vi.spyOn(runtime, 'recordFeatureInteraction')
+  const request = {
+    id: 'rpc_ack',
+    authToken: 'test',
+    method: 'orchestration.ackMessages',
+    params: { terminal: 'term_coord', ackIds: [selected.id] },
+    orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION
   }
-)
+  await expect(dispatcher.dispatch(request)).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'invalid_argument' }
+  })
+  const ack = {
+    ...request,
+    orchestrationRequestId: 'selected-request',
+    orchestrationCompatibilityEvidence: {
+      terminalHandle: 'term_coord',
+      paneKey: harness.coordinatorPaneKey
+    }
+  }
+  await expect(
+    dispatcher.dispatch({
+      ...ack,
+      orchestrationCompatibilityEvidence: { terminalHandle: 'term_other' }
+    })
+  ).resolves.toMatchObject({ ok: false, error: { code: 'consumer_fenced' } })
+  expect(db.readLocalMutationCallerFingerprint()).toBeUndefined()
+  const fingerprint = db.getOrCreateLocalMutationCallerFingerprint()
+  db.db
+    .prepare(
+      `INSERT INTO mutation_receipts
+       (caller_fingerprint, request_id, method, payload_hash, state, receipt, updated_at)
+       VALUES (?, 'expired-request', 'orchestration.send', 'payload', 'completed', '{}', '2000-01-01')`
+    )
+    .run(fingerprint)
+  const expired = db.getMutationReceipt(fingerprint, 'expired-request')
+  await expect(
+    dispatcher.dispatch({
+      ...ack,
+      params: { ...ack.params, ackIds: [selected.id, 'msg_missing'] }
+    })
+  ).resolves.toMatchObject({ ok: false, error: { code: 'invalid_argument' } })
+  expect(db.getMutationReceipt(fingerprint, 'expired-request')).toEqual(expired)
+  expect(db.getMutationReceipt(fingerprint, ack.orchestrationRequestId)).toBeUndefined()
+  expect(db.getMessageById(selected.id)).toEqual(original)
+
+  const results = await Promise.all([dispatcher.dispatch(ack), dispatcher.dispatch(ack)])
+  for (const replayed of [true, false]) {
+    expect(results).toContainEqual(
+      expect.objectContaining({
+        ok: true,
+        result: expect.objectContaining({
+          markedIds: [selected.id],
+          mutation: expect.objectContaining({ replayed })
+        })
+      })
+    )
+  }
+  expect(db.getMessageById(selected.id)).toEqual({ ...original, read: 1 })
+  expect(db.getMutationReceipt(fingerprint, ack.orchestrationRequestId)?.state).toBe('completed')
+  expect(refreshSenders).not.toHaveBeenCalled()
+  expect(recordInteraction).not.toHaveBeenCalled()
+  await expect(
+    dispatcher.dispatch({
+      ...request,
+      method: 'orchestration.check',
+      params: { terminal: 'term_coord', peek: true }
+    })
+  ).resolves.toMatchObject({ ok: true })
+  expect(refreshSenders).toHaveBeenCalledOnce()
+  expect(recordInteraction).toHaveBeenCalledWith('agent-orchestration')
+})
+
+it('rejects a relay-only SSH attachment as a selective mailbox caller', async () => {
+  const { db, runtime } = harness.setup(false)
+  vi.mocked(runtime.getOrchestrationDispatchAuthority).mockRestore()
+  vi.mocked(runtime.getTerminalPaneKey).mockRestore()
+  vi.mocked(runtime.getLiveTerminalPaneKey).mockRestore()
+  vi.mocked(runtime.getTerminalProcessIncarnation).mockRestore()
+  const handle = 'term_bridge'
+  const attachment = runtime.registerOrchestrationCompatibilitySshAttachment('test-ssh', 'live', {
+    handle,
+    paneKey: harness.coordinatorPaneKey,
+    processIncarnation: 'relay:worker'
+  })
+  try {
+    const selected = db.insertMessage({ from: 'sender', to: handle, subject: 'leave unread' })
+    const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+    expect(runtime.getLiveTerminalPaneKey(handle)).toBe(harness.coordinatorPaneKey)
+    expect(runtime.getTerminalProcessIncarnation(handle)).toBe('relay:worker')
+    await expect(
+      dispatcher.dispatch(
+        {
+          id: 'rpc_selective_ssh',
+          authToken: 'test',
+          method: 'orchestration.ackMessages',
+          params: { terminal: handle, ackIds: [selected.id] },
+          orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+          orchestrationRequestId: 'relay_attachment_selective'
+        },
+        {
+          pairedDeviceId: 'test-device',
+          authenticatedCallerFingerprint: 'test-fingerprint',
+          clientKind: 'runtime'
+        }
+      )
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'consumer_fenced', data: { effectsApplied: false } }
+    })
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+    expect(db.getMutationReceipt('test-fingerprint', 'relay_attachment_selective')).toBeUndefined()
+  } finally {
+    runtime.releaseOrchestrationCompatibilitySshAttachment(attachment.attachmentId)
+  }
+})
 
 it('replays only on the original process and implicit Run', async () => {
   const { db, runtime, activeRunId } = harness.setup()

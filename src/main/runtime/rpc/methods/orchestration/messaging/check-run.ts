@@ -14,8 +14,7 @@ import {
 import { interruptedAcknowledgedCheck } from '../routing'
 import { routeAllMailboxPages } from './mailbox-page-routing'
 import { resolveRunScope } from '../runs/run-scope'
-import type { CheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
-import type { z } from 'zod'
+import type { MailboxCheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 import type { MessageWake } from '../../../../orchestration/mailbox/runtime-message-waiters'
 import type {
   OrchestrationEntryCaller,
@@ -26,10 +25,8 @@ import type { CheckMailReconciliation } from './check-mail-reconciliation'
 import { withTakenRunCheckNext } from '../receipt-next'
 import { FEDERATION_RELAY_WAIT_REARM_MS } from '../../../../orchestration/federation/relay/federation-relay-scheduler'
 
-type CheckParamsInput = z.infer<typeof CheckParams>
-
 export async function checkRunMailbox(args: {
-  params: CheckParamsInput
+  params: MailboxCheckParams
   runtime: OrcaRuntimeService
   db: OrchestrationDb
   handle: string
