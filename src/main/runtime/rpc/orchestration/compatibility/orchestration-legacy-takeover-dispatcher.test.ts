@@ -151,6 +151,34 @@ function request(
   }
 }
 
+it.each(['orchestration.ackMessages', 'orchestration.check'])(
+  'rejects a retained legacy caller before %s can select unbound direct mail',
+  async (method) => {
+    const { db, runtime, dispatcher } = createHarness()
+    vi.spyOn(runtime, 'getLiveTerminalPaneKey').mockReturnValue(WORKER_PANE)
+    vi.spyOn(runtime, 'getTerminalProcessIncarnation').mockReturnValue('process-1')
+    const mail = db.insertMessage({
+      from: 'sender',
+      to: WORKER_HANDLE,
+      subject: 'current direct mail'
+    })
+    await expect(
+      dispatcher.dispatch(
+        request(
+          method,
+          { terminal: WORKER_HANDLE, run: 'run_unbound', ackIds: [mail.id] },
+          evidence('worker'),
+          'refused_legacy_ack'
+        )
+      )
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'legacy_read_only', data: { effectsApplied: false } }
+    })
+    expect(db.getMessageById(mail.id)?.read).toBe(0)
+  }
+)
+
 describe('legacy compatibility after explicit takeover', () => {
   it('refuses selective IDs without returning or consuming a legacy page', async () => {
     const h = createHarness()
@@ -173,8 +201,8 @@ describe('legacy compatibility after explicit takeover', () => {
     ).resolves.toMatchObject({
       ok: false,
       error: {
-        code: 'invalid_argument',
-        message: 'Selective acknowledgment is unavailable for legacy mailbox callers.'
+        code: 'legacy_read_only',
+        data: { effectsApplied: false }
       }
     })
     expect(h.db.getMessageById(unread.id)?.read).toBe(0)

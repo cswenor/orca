@@ -89,7 +89,7 @@ export const ORCHESTRATION_CHECK_METHODS = [
       const process = runtime.getTerminalProcessIncarnation(handle)
       const revalidateCaller = () => {
         if (params.ackIds) {
-          assertSelectiveAckCaller(orchestrationCaller, process)
+          assertSelectiveAckCaller(orchestrationCaller, runtime, handle, process)
         }
         if (
           runtime.getTerminalPaneKey(handle) !== livePane ||
@@ -185,15 +185,6 @@ export const ORCHESTRATION_CHECK_METHODS = [
               reconciliation,
               reader,
               revalidateCaller,
-              ...(params.ackIds
-                ? {
-                    revalidateConsumer: () => {
-                      if (db.getCurrentRunForCoordinator(caller)) {
-                        throw dispatchFenced()
-                      }
-                    }
-                  }
-                : {}),
               acknowledgeOnly: !params.wait
             })
           )

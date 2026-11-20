@@ -30,13 +30,6 @@ export async function handleLegacyCheck(args: {
   if (!principal) {
     return undefined
   }
-  if ('ackIds' in params && params.ackIds !== undefined) {
-    throw new OrchestrationError(
-      'invalid_argument',
-      'Selective acknowledgment is unavailable for legacy mailbox callers.',
-      { effectsApplied: false }
-    )
-  }
   const db = runtime.getOrchestrationDb()
   if (params.compatibilityQuestionAck) {
     const answer = parseLegacyQuestionAck(params.compatibilityQuestionAck)

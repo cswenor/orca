@@ -131,32 +131,54 @@ it('refuses a stale terminal and saved pane without a mutation ID', async () => 
   expect(db.getMessageById(selected.id)?.read).toBe(0)
 })
 
-it('fences an implicit Dispatch selection when a Run becomes current during custody', async () => {
+it.each(['pty:retained', 'structured:released'])(
+  'does not treat %s as live mailbox authority',
+  async (process) => {
+    const { db, runtime, ctx } = harness.setup(false)
+    const selected = db.insertMessage({ from: 'sender', to: 'term_coord', subject: 'unread' })
+    vi.mocked(runtime.getLiveTerminalPaneKey).mockReturnValue(
+      process.startsWith('structured:') ? harness.coordinatorPaneKey : null
+    )
+    vi.mocked(runtime.getTerminalProcessIncarnation).mockReturnValue(process)
+    await expect(
+      harness.call(
+        'orchestration.ackMessages',
+        { terminal: 'term_coord', ackIds: [selected.id] },
+        ctx
+      )
+    ).rejects.toMatchObject({ code: 'consumer_fenced', data: { effectsApplied: false } })
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+  }
+)
+
+it('refuses a replacement on the same pane until the local Dispatch is reattached', async () => {
   const { db, runtime, ctx } = harness.setup()
   const pane = 'tab_worker:33333333-3333-4333-9333-333333333333'
   vi.mocked(runtime.getTerminalPaneKey).mockImplementation((handle) =>
     handle === 'term_worker' ? pane : harness.coordinatorPaneKey
   )
   const task = db.createTask({ spec: 'worker before binding' })
-  const dispatch = createRootDispatch(db, task.id, 'term_worker', pane)
+  const dispatch = createRootDispatch(db, task.id, 'term_worker', pane, undefined, 'pty:prior')
   const selected = db.insertMessage({
     from: 'term_coord',
     to: `dispatch:${dispatch.id}`,
     runId: dispatch.run_id,
     subject: 'pre-bind question'
   })
-  const pending = harness.call(
-    'orchestration.ackMessages',
-    { terminal: 'term_worker', ackIds: [selected.id] },
-    ctx
-  )
-  db.createRun({
-    objective: 'now coordinate',
-    coordinatorHandle: 'term_worker',
-    coordinatorPaneKey: pane
-  })
-  await expect(pending).rejects.toMatchObject({ code: 'consumer_fenced' })
+  const check = () =>
+    harness.call(
+      'orchestration.ackMessages',
+      { terminal: 'term_worker', ackIds: [selected.id] },
+      ctx
+    )
+  await expect(check()).rejects.toMatchObject({ code: 'consumer_fenced' })
   expect(db.getMessageById(selected.id)?.read).toBe(0)
+  reattachDispatchConsumer(db, {
+    dispatchId: dispatch.id,
+    paneKey: pane,
+    processIncarnation: 'runtime_test:term_worker:1'
+  })
+  await expect(check()).resolves.toMatchObject({ markedIds: [selected.id] })
 })
 
 it('replays only on the original process and implicit Run', async () => {

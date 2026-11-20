@@ -4771,6 +4771,8 @@ const ORCHESTRATION_MESSAGING_AND_GATES_REFERENCE_MARKDOWN = [
   "it remains that Dispatch's current consumer, even with an outstanding Run delivery.",
   "A bound Run selection never includes the caller's own direct mail. To select",
   "only unbound direct mail, specify `--run run_unbound`.",
+  "If any selected unread message is held by a structured chat, the entire",
+  "selection is refused. Use a normal check for that mail.",
   "`--retry-request` only replays for the original process or live chat lease and",
   "mailbox generation. If either changed, inspect the current mailbox again.",
   "Released agent sessions cannot acknowledge wake-up mail until they are running",

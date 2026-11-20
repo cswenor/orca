@@ -36,8 +36,8 @@ export async function checkDirectMailbox(args: {
   if (params.ackIds) {
     return acknowledgeSelectedMessages({
       db,
-      reconciliation: args.reconciliation,
       mailbox: handle,
+      signal,
       ids: params.ackIds,
       direct: true,
       runId: args.runId,

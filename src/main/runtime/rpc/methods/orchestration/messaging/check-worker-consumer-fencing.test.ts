@@ -99,6 +99,8 @@ describe('orchestration.check on a re-attached Dispatch', () => {
 
   it('leaves selected mail unread when the Dispatch consumer is replaced on the same pane', async () => {
     const dispatchId = attachedDispatchWithMail()
+    vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(PANE_A)
+    vi.mocked(runtime.getTerminalProcessIncarnation).mockReturnValue('runtime:pty-a:1')
     const message = db.getUnreadMessages(`dispatch:${dispatchId}`)[0]!
     const identity = db.getActiveDispatchForIdentity.bind(db)
     let resolved = 0
@@ -120,11 +122,13 @@ describe('orchestration.check on a re-attached Dispatch', () => {
     expect(db.getMessageById(message.id)?.read).toBe(0)
 
     vi.mocked(db.getActiveDispatchForIdentity).mockRestore()
+    vi.mocked(runtime.getTerminalProcessIncarnation).mockReturnValue('runtime:pty-a:2')
     await expect(acknowledge()).resolves.toMatchObject({ markedIds: [message.id] })
   })
 
   it('explicit unbound selection takes direct mail without touching the attached Dispatch', async () => {
-    ;({ db, ctx } = h.setup(false))
+    ;({ db, runtime, ctx } = h.setup(false))
+    vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(PANE_A)
     const { id: runId } = db.createRun({
       objective: 'attached worker',
       coordinatorHandle: 'term_coord',

@@ -1,16 +1,17 @@
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import { getMessagesByIds } from '../../../../orchestration/db/messages/messages-by-id'
-import type { CheckMailReconciliation } from './check-mail-reconciliation'
+import { runLifecycleWriteTransaction } from '../../../../orchestration/db/lifecycle-write-transaction-runner'
+import { reconcileLifecycleMessage } from '../../../../orchestration/workers/lifecycle/lifecycle-reconciliation'
 import { runOwnsDirectMessageSql } from '../../../../orchestration/db/runs/run-coordinator-mail-routing'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
 import { exposeMessages } from './mailbox-message-receipt'
 import { ORCHESTRATION_LEGACY_RUN_ID } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
 
-export async function acknowledgeSelectedMessages(args: {
+export function acknowledgeSelectedMessages(args: {
   db: OrchestrationDb
-  reconciliation: CheckMailReconciliation
   mailbox: string
   ids: string[]
+  signal?: AbortSignal
   direct: boolean
   runId?: string
   recordReceipt?: (receipt: unknown) => void
@@ -70,36 +71,36 @@ export async function acknowledgeSelectedMessages(args: {
     }
     return messages
   }
-  const selected = validateSelection()
-  return args.reconciliation.takeSelected({
-    selected: selected.filter((message) => message.read === 0),
-    direct: args.direct,
-    revalidate: () => {
-      const current = validateSelection()
-      // A routed row no longer belongs to the observed custody source.
-      if (
-        current.some(
-          (row, i) => row.to_handle !== selected[i]?.to_handle || row.run_id !== selected[i]?.run_id
-        )
-      ) {
-        throw new OrchestrationError(
-          'consumer_fenced',
-          'Selected mail moved while acknowledging it. No messages were acknowledged.',
-          { effectsApplied: false }
-        )
+  return runLifecycleWriteTransaction(db.db, 'ack_selected_messages', () => {
+    args.signal?.throwIfAborted()
+    const messages = validateSelection().filter((message) => message.read === 0)
+    const markedIds = messages.map((message) => message.id)
+    if (db.getStructuredMailSendsForMessages(markedIds).length) {
+      throw new OrchestrationError(
+        'invalid_argument',
+        'Selected mail is held by a structured chat. Use a normal check for that mail. No messages were acknowledged.',
+        { effectsApplied: false }
+      )
+    }
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index]
+      if (message.type === 'worker_done' || message.type === 'heartbeat') {
+        reconcileLifecycleMessage(db, message)
+        // Reconciliation can rewrite a rejected lifecycle message's payload and type.
+        messages[index] = db.getMessageById(message.id) ?? message
       }
-    },
-    respond: (messages) => {
-      const marked = new Set(messages.map((message) => message.id))
-      return {
-        ...args.mailboxIdentity,
-        messages: exposeMessages(messages.map((message) => ({ ...message, read: 1 }))),
-        count: messages.length,
-        acknowledged: null,
-        markedIds: [...marked],
-        alreadyReadIds: ids.filter((id) => !marked.has(id))
-      }
-    },
-    record: args.recordReceipt
+    }
+    db.markAsRead(markedIds)
+    const marked = new Set(markedIds)
+    const response = {
+      ...args.mailboxIdentity,
+      messages: exposeMessages(messages.map((message) => ({ ...message, read: 1 }))),
+      count: messages.length,
+      acknowledged: null,
+      markedIds,
+      alreadyReadIds: ids.filter((id) => !marked.has(id))
+    }
+    args.recordReceipt?.(response)
+    return response
   })
 }

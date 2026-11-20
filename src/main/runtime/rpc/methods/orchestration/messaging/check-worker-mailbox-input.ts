@@ -26,7 +26,6 @@ export type WorkerMailboxCheckInput = {
   activeDispatch: ActiveDispatch | undefined
   remoteAttachment: RemoteAttachment | undefined
   wakeTypes?: MessageType[]
-  revalidateConsumer?: () => void
   deferDelivery?: () => boolean
   recordMutationReceipt?: (receipt: unknown) => void
   /** An ack the enclosing Run check already applied, reported when this check applied none. */

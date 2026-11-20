@@ -15,6 +15,7 @@ import type {
 import type { CheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 import type { z } from 'zod'
 import { acknowledgeSelectedMessages } from './selective-message-ack'
+import { assertSelectiveAckDispatchProcess } from '../../../orchestration/callers/selective-ack-caller'
 
 export async function checkRunPendingMail(args: {
   params: z.infer<typeof CheckParams>
@@ -74,9 +75,9 @@ export async function checkRunPendingMail(args: {
   if (params.ackIds) {
     revalidateConsumer()
     return {
-      result: await acknowledgeSelectedMessages({
+      result: acknowledgeSelectedMessages({
         db,
-        reconciliation: args.reconciliation,
+        signal: args.signal,
         mailbox: address,
         ids: params.ackIds,
         direct: false,
@@ -98,6 +99,10 @@ export async function checkRunPendingMail(args: {
                   ) {
                     throw dispatchFenced()
                   }
+                  assertSelectiveAckDispatchProcess(
+                    current.process_incarnation,
+                    runtime.getTerminalProcessIncarnation(handle)
+                  )
                 }
               }
             : undefined

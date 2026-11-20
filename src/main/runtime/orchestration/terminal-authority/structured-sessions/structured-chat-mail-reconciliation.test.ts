@@ -47,7 +47,7 @@ function holdMailRead(sessionId: string, hold: () => Promise<void>): void {
 }
 
 describe('mail checks reconcile the currently owned source attempts', () => {
-  it('withdraws only selected queued direct mail and leaves invalid selections untouched', async () => {
+  it('rejects a mixed selection without withdrawing queued cards or marking any rows', async () => {
     await openChat(COORDINATOR)
     await busyChat(PEER_CHAT)
     await coordinatorRunAndTask()
@@ -60,7 +60,11 @@ describe('mail checks reconcile the currently owned source attempts', () => {
       )
     }
     await vi.waitFor(async () => expect(await queuedCardTexts(PEER_CHAT)).toHaveLength(2), WAIT)
+    const queued = await queuedCardTexts(PEER_CHAT)
     const selected = db.getUnreadMessages(address).find((mail) => mail.subject === 'selected mail')!
+    const plain = db.insertMessage({ from: 'sender', to: address, subject: 'not queued' })
+    const reservations = db.getStructuredMailSendsForMessages([selected.id])
+    expect(reservations).not.toHaveLength(0)
     const invalid = await dispatcher.dispatch(
       request(
         'orchestration.ackMessages',
@@ -71,42 +75,30 @@ describe('mail checks reconcile the currently owned source attempts', () => {
     expect(invalid).toMatchObject({ ok: false, error: { code: 'invalid_argument' } })
     expect(await queuedCardTexts(PEER_CHAT)).toHaveLength(2)
 
-    expect(
-      await call('orchestration.ackMessages', { ackIds: [selected.id] }, { sessionId: PEER_CHAT })
-    ).toMatchObject({ markedIds: [selected.id], alreadyReadIds: [] })
-    expect(db.getUnreadMessages(address).map((mail) => mail.subject)).toEqual(['unselected mail'])
-    const queued = await queuedCardTexts(PEER_CHAT)
-    expect(queued).toHaveLength(1)
-    expect(queued[0]).toContain('unselected mail')
+    const held = await dispatcher.dispatch(
+      request(
+        'orchestration.ackMessages',
+        { ackIds: [plain.id, selected.id] },
+        { sessionId: PEER_CHAT }
+      )
+    )
+    expect(held).toMatchObject({
+      ok: false,
+      error: {
+        code: 'invalid_argument',
+        message: expect.stringContaining('Use a normal check')
+      }
+    })
+    expect(db.getMessageById(plain.id)?.read).toBe(0)
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+    expect(db.getStructuredMailSendsForMessages([selected.id])).toEqual(reservations)
+    expect(await queuedCardTexts(PEER_CHAT)).toEqual(queued)
   })
 
-  it('leaves selected mail unread if its caller releases the lease during custody', async ({
-    onTestFinished
-  }) => {
-    await openChat(COORDINATOR)
-    await busyChat(PEER_CHAT)
-    await coordinatorRunAndTask()
+  it('leaves selected mail unread when the structured caller lease was released', async () => {
+    await openChat(PEER_CHAT)
     const address = formatOrcaSessionAddress(testOrcaSessionId(PEER_CHAT))
-    await call(
-      'orchestration.send',
-      { to: address, subject: 'wake-up mail' },
-      {
-        sessionId: COORDINATOR
-      }
-    )
-    await vi.waitFor(async () => expect(await queuedCardTexts(PEER_CHAT)).toHaveLength(1), WAIT)
-    const selected = db.getUnreadMessages(address)[0]!
-    const observed = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    onTestFinished(() => release.resolve())
-    holdMailRead(PEER_CHAT, async () => {
-      observed.resolve()
-      await release.promise
-    })
-    const acknowledging = dispatcher.dispatch(
-      request('orchestration.ackMessages', { ackIds: [selected.id] }, { sessionId: PEER_CHAT })
-    )
-    await observed.promise
+    const selected = db.insertMessage({ from: 'sender', to: address, subject: 'wake-up mail' })
     const store = host.deps.store
     const read = store.requireWritableRecord.bind(store)
     vi.spyOn(store, 'requireWritableRecord').mockImplementation((id) => {
@@ -115,7 +107,9 @@ describe('mail checks reconcile the currently owned source attempts', () => {
         ? { ...record, lease: { ...record.lease, claimStatus: 'released' } }
         : record
     })
-    release.resolve()
+    const acknowledging = dispatcher.dispatch(
+      request('orchestration.ackMessages', { ackIds: [selected.id] }, { sessionId: PEER_CHAT })
+    )
     expect(await acknowledging).toMatchObject({
       ok: false,
       error: { code: 'session_caller_not_live', data: { effectsApplied: false } }

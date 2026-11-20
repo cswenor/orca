@@ -218,19 +218,9 @@ export class CheckMailReconciliation {
     respond: (messages: MessageRow[]) => T
     record?: (response: T) => void
   }): Promise<T> {
-    return this.takeSelected({ ...args, direct: true })
-  }
-
-  /** Takes an explicit set without creating or acknowledging a Delivery. */
-  async takeSelected<T>(args: {
-    selected: MessageRow[]
-    direct: boolean
-    revalidate: () => void
-    respond: (messages: MessageRow[]) => T
-    record?: (response: T) => void
-  }): Promise<T> {
     return this.reconcile({
       ...args,
+      direct: true,
       finalize: (messages) => {
         this.db.markAsRead(messages.map((message) => message.id))
         const response = args.respond(messages)

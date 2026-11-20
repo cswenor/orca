@@ -19,6 +19,8 @@ import type {
   LegacySendParams
 } from './orchestration-legacy-operation'
 import { LegacyCoordinatorAuthority } from './orchestration-legacy-coordinator-authority'
+import { OrchestrationError } from '../../../orchestration/orchestration-error'
+import { isSelectiveAckRequest } from '../callers/selective-ack-caller'
 
 const COORDINATOR_PREFLIGHT_METHODS = new Set([
   'orchestration.taskCreate',
@@ -72,6 +74,13 @@ export class OrchestrationLegacyCompatibility {
       return { handled: false }
     }
     const values = params as Record<string, unknown>
+    if (isSelectiveAckRequest(request)) {
+      const terminal = stringValue(values.terminal)
+      if (terminal) {
+        this.assertNotLegacySelectiveCaller(terminal)
+      }
+      return { handled: false }
+    }
     if (CURRENT_AUTHORITY_PREFLIGHT_METHODS.has(request.method)) {
       const callerAuthority = this.resolveCurrentAuthority(request, values)
       if (callerAuthority) {
@@ -132,6 +141,30 @@ export class OrchestrationLegacyCompatibility {
           revalidate: () => this.revalidateCoordinatorAuthority(request, authority)
         }
       : undefined
+  }
+
+  private assertNotLegacySelectiveCaller(terminalHandle: string): void {
+    const db = this.runtime.getOrchestrationDb()
+    const runId = db.getLegacyAdoption()?.adopted_run_id
+    if (!runId) {
+      return
+    }
+    const paneKey = this.runtime.getTerminalPaneKey(terminalHandle) ?? undefined
+    const identity = { runId, terminalHandle, paneKey }
+    const handleOnly = { runId, terminalHandle }
+    if (
+      db.resolveLegacyWorkerCandidate(identity) ||
+      db.resolveLegacyWorkerCandidate(handleOnly) ||
+      db.resolveLegacyCompatibilityPrincipalByIdentity({ ...identity, role: 'worker' }) ||
+      db.resolveLegacyCompatibilityPrincipalByIdentity({ ...handleOnly, role: 'worker' }) ||
+      db.resolveLegacyCoordinatorCandidate(identity)
+    ) {
+      throw new OrchestrationError(
+        'legacy_read_only',
+        'Selective acknowledgment is unavailable to retained legacy callers. No messages were acknowledged.',
+        { effectsApplied: false }
+      )
+    }
   }
 
   private resolveCurrentAuthority(

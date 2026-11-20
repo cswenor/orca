@@ -2,8 +2,12 @@ import { ORCHESTRATION_UNBOUND_RUN_ID } from '../../../../../shared/orchestratio
 import type { OrchestrationEntryCaller } from '../../../orchestration/addressing/orchestration-caller-identity'
 import { getMessagesByIds } from '../../../orchestration/db/messages/messages-by-id'
 import type { OrcaRuntimeService } from '../../../orca-runtime'
+import { OrchestrationError } from '../../../orchestration/orchestration-error'
 import type { RpcRequest } from '../../core'
-import { assertSelectiveAckCaller } from '../callers/selective-ack-caller'
+import {
+  assertSelectiveAckCaller,
+  assertSelectiveAckDispatchProcess
+} from '../callers/selective-ack-caller'
 import {
   orchestrationCallerIdentity,
   resolveRunScope
@@ -19,19 +23,25 @@ export function selectiveAckReceiptBinding(
   if (request.method !== 'orchestration.ackMessages' && request.method !== 'orchestration.check') {
     return undefined
   }
-  const { ackIds, terminal, terminalPaneKey, run } = params as {
-    ackIds?: string[]
-    terminal?: string
-    terminalPaneKey?: string
-    run?: string
-  }
-  if (!ackIds) {
+  if (
+    !params ||
+    typeof params !== 'object' ||
+    !('ackIds' in params) ||
+    !Array.isArray(params.ackIds)
+  ) {
     return undefined
   }
-  const handle = terminal ?? 'unknown'
+  const ackIds = params.ackIds.filter((id): id is string => typeof id === 'string')
+  const handle =
+    'terminal' in params && typeof params.terminal === 'string' ? params.terminal : 'unknown'
+  const terminalPaneKey =
+    'terminalPaneKey' in params && typeof params.terminalPaneKey === 'string'
+      ? params.terminalPaneKey
+      : undefined
+  const run = 'run' in params && typeof params.run === 'string' ? params.run : undefined
   const livePane = runtime.getTerminalPaneKey(handle)
   const process = runtime.getTerminalProcessIncarnation(handle)
-  const lease = assertSelectiveAckCaller(caller, process)
+  const lease = assertSelectiveAckCaller(caller, runtime, handle, process)
   if (run === ORCHESTRATION_UNBOUND_RUN_ID) {
     return { process, lease, direct: handle }
   }
@@ -60,6 +70,7 @@ export function selectiveAckReceiptBinding(
       const mailbox = `dispatch:${dispatch.id}`
       for (const row of getMessagesByIds(db, ackIds).values()) {
         if (row.to_handle === mailbox) {
+          assertSelectiveAckDispatchProcess(dispatch.process_incarnation, process)
           residual = [dispatch.id, dispatch.consumer_generation]
           break
         }
@@ -74,6 +85,22 @@ export function selectiveAckReceiptBinding(
   }
   const attachment =
     !dispatch && paneKey ? db.findActiveRemoteAttachmentForPane(paneKey) : undefined
+  if (dispatch) {
+    assertSelectiveAckDispatchProcess(dispatch.process_incarnation, process)
+  }
+  if (
+    attachment &&
+    paneKey &&
+    !db.isRemoteAttachmentProcessCurrent({
+      dispatchId: attachment.dispatch_id,
+      paneKey,
+      processIncarnation: process
+    })
+  ) {
+    throw new OrchestrationError('consumer_fenced', 'The remote Dispatch caller was replaced.', {
+      effectsApplied: false
+    })
+  }
   return {
     process,
     lease,
