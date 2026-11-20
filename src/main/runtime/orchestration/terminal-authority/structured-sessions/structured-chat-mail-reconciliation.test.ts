@@ -49,7 +49,7 @@ function holdMailRead(sessionId: string, hold: () => Promise<void>): void {
 describe('mail checks reconcile the currently owned source attempts', () => {
   it('rejects a mixed selection without withdrawing queued cards or marking any rows', async () => {
     await openChat(COORDINATOR)
-    await busyChat(PEER_CHAT)
+    const peer = await busyChat(PEER_CHAT)
     await coordinatorRunAndTask()
     const address = formatOrcaSessionAddress(testOrcaSessionId(PEER_CHAT))
     for (const subject of ['selected mail', 'unselected mail']) {
@@ -65,23 +65,19 @@ describe('mail checks reconcile the currently owned source attempts', () => {
     const plain = db.insertMessage({ from: 'sender', to: address, subject: 'not queued' })
     const reservations = db.getStructuredMailSendsForMessages([selected.id])
     expect(reservations).not.toHaveLength(0)
-    const invalid = await dispatcher.dispatch(
-      request(
-        'orchestration.ackMessages',
-        { ackIds: [selected.id, 'msg_missing'] },
-        { sessionId: PEER_CHAT }
-      )
-    )
+    const ack = (ackIds: string[]) =>
+      dispatcher.dispatch({
+        ...request('orchestration.ackMessages', { ackIds }),
+        orchestrationCompatibilityEvidence: {
+          agentSessionId: PEER_CHAT,
+          agentSessionMailboxLease: peer.mailboxLease
+        }
+      })
+    const invalid = await ack([selected.id, 'msg_missing'])
     expect(invalid).toMatchObject({ ok: false, error: { code: 'invalid_argument' } })
     expect(await queuedCardTexts(PEER_CHAT)).toHaveLength(2)
 
-    const held = await dispatcher.dispatch(
-      request(
-        'orchestration.ackMessages',
-        { ackIds: [plain.id, selected.id] },
-        { sessionId: PEER_CHAT }
-      )
-    )
+    const held = await ack([plain.id, selected.id])
     expect(held).toMatchObject({
       ok: false,
       error: {

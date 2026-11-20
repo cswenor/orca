@@ -5,6 +5,7 @@ import type {
 } from '../../../../codex/app-server/codex-app-server-connection-types'
 import type { openCodexAppServerConnection } from '../../../../codex/app-server/codex-app-server-connection'
 import { computeAgentSessionPayloadFingerprint } from '../../../../../shared/agent-session/lifecycle/operations/agent-session-mutation-envelope'
+import { ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV } from '../../../../../shared/agent-session/lifecycle/launch/agent-session-caller-env'
 import { attachFingerprintFields } from '../../../../native-chat/agent-session-wire/acquisition/structured-agent-session-attach'
 import { isRecord } from '../../../rpc/orchestration/callers/session.test-fixture'
 
@@ -14,6 +15,7 @@ export type FakeConnection = Omit<CodexAppServerConnection, 'closed'> & {
   closed: boolean
   handlers: CodexAppServerConnectionHandlers
   threadId: string | null
+  mailboxLease: string | undefined
   /** Every JSON-RPC method the adapter called, in order. */
   methods: string[]
   turns: { clientUserMessageId: string; text: string }[]
@@ -47,7 +49,7 @@ export function fakeCodex() {
   const connections: FakeConnection[] = []
   let turnCounter = 0
   // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: a fake answering the JSON-RPC calls the adapter makes, as the shipped integration test does.
-  const openConnection = (async (_launch, handlers = {}) => {
+  const openConnection = (async (launch, handlers = {}) => {
     providerFaults.starts += 1
     if (providerFaults.startDelayMs) {
       await new Promise((resolve) => setTimeout(resolve, providerFaults.startDelayMs))
@@ -58,6 +60,7 @@ export function fakeCodex() {
     const connection: FakeConnection = {
       handlers,
       threadId: null,
+      mailboxLease: launch.env?.[ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV],
       methods: [],
       turns: [],
       steers: [],
