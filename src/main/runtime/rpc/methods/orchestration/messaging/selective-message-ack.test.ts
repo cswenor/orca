@@ -65,11 +65,11 @@ it('keeps a bound Run selection separate from explicit unbound direct mail', asy
     subject: 'selected Run status'
   })
   db.insertMessage({
-    id: 'msg_run_owned_direct',
+    id: 'msg_run_routed',
     from: 'term_child',
     to: 'term_coord',
     runId: activeRunId,
-    subject: 'unselected Run-owned direct mail'
+    subject: 'unselected message routed to the Run at insert'
   })
   db.insertMessage({
     id: 'msg_unbound',
@@ -85,14 +85,14 @@ it('keeps a bound Run selection separate from explicit unbound direct mail', asy
   await expect(acknowledge(['msg_run_selected'])).resolves.toMatchObject({
     markedIds: ['msg_run_selected']
   })
-  expect(db.getMessageById('msg_run_owned_direct')).toMatchObject({
-    to_handle: 'term_coord',
+  expect(db.getMessageById('msg_run_routed')).toMatchObject({
+    to_handle: `run:${activeRunId}`,
     read: 0
   })
   expect(db.getMessageById('msg_unbound')?.read).toBe(0)
-  await expect(
-    acknowledge(['msg_unbound', 'msg_run_owned_direct'], 'run_unbound')
-  ).rejects.toMatchObject({ code: 'invalid_argument' })
+  await expect(acknowledge(['msg_unbound', 'msg_run_routed'], 'run_unbound')).rejects.toMatchObject(
+    { code: 'invalid_argument' }
+  )
   expect(db.getMessageById('msg_unbound')?.read).toBe(0)
   await expect(acknowledge(['msg_unbound'], 'run_unbound')).resolves.toMatchObject({
     markedIds: ['msg_unbound']
