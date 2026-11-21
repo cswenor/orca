@@ -166,12 +166,12 @@ export async function settleStructuredMailSends(input: {
   const resend: StructuredMailResend[] = []
   // Once per chat after the pass, however many of its cards the queue may now hand over.
   const wake = new Set<string>()
-  const pendingEdges: string[] = []
+  const handedBack: string[] = []
   let released = false
-  // Stable reservations no longer hold startup open; retries and unsent wake/handback edges do.
+  // A queued wake doesn't change custody. A release still has to reach the next owner.
   const oldest = () => {
     let sequence = oldestStructuredWork(db, mailboxHandle, outstanding, resend, 0)
-    for (const id of pendingEdges) {
+    for (const id of handedBack) {
       sequence = Math.min(sequence, db.getMessageById(id)?.sequence ?? 0)
     }
     return sequence
@@ -198,10 +198,10 @@ export async function settleStructuredMailSends(input: {
     if (decision.wake) {
       wake.add(row.session_id)
     }
-    if (decision.wake || decision.released) {
-      pendingEdges.push(row.message_id)
+    if (decision.released) {
+      handedBack.push(row.message_id)
+      released = true
     }
-    released ||= decision.released
   }
   wake.forEach((sessionId) => host.wakeQueue(sessionId))
   return { outstanding, resend, released }
