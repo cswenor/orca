@@ -193,8 +193,7 @@ export function passHeldWorkerMail(
   const lineageMailboxes = [...seen].map((id) => `dispatch:${id}`)
   const custody = custodyOf(db, followUpId)
   if (custody === 'starting') {
-    runtime.withdrawStaleChatMail(lineageMailboxes)
-    return
+    return runtime.withdrawStaleChatMail(lineageMailboxes, restoring)
   }
   const worker = db.getWorkerDispatch(followUpId)
   for (const source of [...seen].slice(1)) {
@@ -229,18 +228,16 @@ export function passHeldWorkerMail(
     // A follow-up that already finished holds this mail as any finished worker does.
     markUnreadFollowUpMail(db, followUpId)
   }
-  runtime.withdrawStaleChatMail(lineageMailboxes)
+  const cleanup = runtime.withdrawStaleChatMail(lineageMailboxes, restoring)
   if (custody === 'ready') {
     // Its Task is in: a chat's moved mail follows it, each message whole.
-    const mailbox = `dispatch:${followUpId}`
-    if (restoring) {
-      return runtime.repointPendingMessagesForHandle(mailbox, true)
-    }
-    runtime.deliverPendingMessagesForHandle(mailbox)
+    runtime.deliverPendingMessagesForHandle(`dispatch:${followUpId}`)
   }
-  return custody === 'reported'
-    ? continueUnreadWorkerMail(runtime, db, followUpId, restoring)
-    : undefined
+  if (custody !== 'reported') {
+    return cleanup
+  }
+  const next = () => continueUnreadWorkerMail(runtime, db, followUpId, restoring)
+  return cleanup ? cleanup.then(next) : next()
 }
 
 /** Nothing is lost silently: the coordinator hears that its mail did not reach the worker, once per batch. */

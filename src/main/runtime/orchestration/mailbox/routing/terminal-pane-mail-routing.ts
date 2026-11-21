@@ -239,11 +239,10 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     this.orchestrationStructuredMailboxPointerDelivery.forgetSession(sessionId)
   }
 
-  /** After a check, move, takeover or reset, delete the cards that would hand a chat mail it no
-   *  longer owes. Visible cleanup only: it never holds up the action that called it. `mailboxes`:
-   *  only those the action touched; without it, every mailbox (a reset, a store becoming readable). */
-  withdrawStaleChatMail(mailboxes?: Iterable<string>): void {
-    this.orchestrationStructuredMailboxPointerDelivery.withdrawStale(mailboxes)
+  /** Visible cleanup after a check or move. Only startup recovery waits for the resulting redrives. */
+  withdrawStaleChatMail(mailboxes?: Iterable<string>, waitForRedrives = false) {
+    const delivery = this.orchestrationStructuredMailboxPointerDelivery
+    return delivery.withdrawStale(mailboxes, waitForRedrives)
   }
 
   /** Read current mailbox custody without settling a card or its reservation. */
@@ -325,7 +324,7 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     return pending.size ? Promise.all(pending).then(() => undefined) : undefined
   }
 
-  repointPendingMessagesForHandle(
+  protected repointPendingMessagesForHandle(
     handle: string,
     waitForRedrive: boolean
   ): Promise<void> | undefined {

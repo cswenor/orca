@@ -102,7 +102,7 @@ export abstract class RuntimeConstructionServices extends RuntimeAgentStatusRead
     }
   ): void
   protected abstract readonly ptysById: ReadonlyMap<string, RuntimePtyWorktreeRecord>
-  abstract repointPendingMessagesForHandle(
+  protected abstract repointPendingMessagesForHandle(
     handle: string,
     waitForRedrive: boolean
   ): Promise<void> | undefined

@@ -30,6 +30,17 @@ export class StructuredMailboxRedriveState {
     return waiter.promise
   }
 
+  join(mailboxes: Iterable<string>): Promise<void> | undefined {
+    const pending = new Set<Promise<void>>()
+    for (const mailbox of mailboxes) {
+      const redrive = this.whenIdle(mailbox)
+      if (redrive) {
+        pending.add(redrive)
+      }
+    }
+    return pending.size ? Promise.all(pending).then(() => undefined) : undefined
+  }
+
   finish(mailbox: string): Set<string> | undefined {
     this.inFlight.delete(mailbox)
     const rerun = this.rerun.get(mailbox)

@@ -110,18 +110,20 @@ export class OrchestrationStructuredMailboxPointerDelivery<
   /** Mail a check took, a move re-addressed, or an owner gave up may still wait as a card: delete
    *  those cards so no agent is handed it. Visible cleanup only; the queue asks at handover anyway.
    *  Only the mailboxes the action touched; every one only at startup and reset. */
-  withdrawStale(mailboxes?: Iterable<string>): void {
+  withdrawStale(mailboxes?: Iterable<string>, waitForRedrives = false): Promise<void> | undefined {
     let scope: Iterable<string>
     try {
       scope = mailboxes ?? this.deps.getDb()?.getStructuredMailSendMailboxes() ?? []
     } catch {
       // A database closing under shutdown has no cards left to settle.
-      return
+      return undefined
     }
-    for (const mailboxHandle of scope) {
+    const targets = waitForRedrives && !Array.isArray(scope) ? [...scope] : scope
+    for (const mailboxHandle of targets) {
       this.settledState.invalidate(mailboxHandle)
       this.deliverForHandle(mailboxHandle)
     }
+    return waitForRedrives ? this.redrives.join(targets) : undefined
   }
 
   /** Read only: the queue asks this choosing and publishing its next card, so it settles nothing. */

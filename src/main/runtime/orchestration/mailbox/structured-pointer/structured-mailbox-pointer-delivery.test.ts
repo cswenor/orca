@@ -287,6 +287,39 @@ const flush = async () => {
 }
 
 describe('structured mailbox delivery: each message whole', () => {
+  it('drains ancestor custody even when the successor has no pending redrive', async () => {
+    const h = harness({ busy: true })
+    h.receive('m1')
+    await h.deliver()
+    const successor = 'dispatch:d2'
+    h.mail.get('m1')!.to_handle = successor
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const withdraw = vi.mocked(h.host.withdraw).getMockImplementation()!
+    vi.mocked(h.host.withdraw).mockImplementationOnce(async (sessionId, operationId) => {
+      entered.resolve()
+      await release.promise
+      return withdraw(sessionId, operationId)
+    })
+    let finished = false
+    const cleanup = Promise.resolve(h.delivery.withdrawStale([successor, mailbox], true)).then(
+      () => {
+        finished = true
+      }
+    )
+    try {
+      await entered.promise
+      await flush()
+      expect(finished).toBe(false)
+      expect(h.records.size).toBe(1)
+    } finally {
+      release.resolve()
+      await cleanup
+    }
+    expect(h.records.size).toBe(0)
+    expect(h.mail.get('m1')).toMatchObject({ to_handle: successor, read: 0 })
+  })
+
   it('settles a handoff that wins stale-card withdrawal without sending it to the new owner', async () => {
     const h = harness({ busy: true })
     h.receive('m1')
