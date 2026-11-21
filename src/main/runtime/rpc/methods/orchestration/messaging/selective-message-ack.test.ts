@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { afterEach, expect, it, vi } from 'vitest'
 import {
   createRootDispatch,
@@ -361,16 +360,25 @@ it('only writes read state and a receipt, including on dispatcher replay', async
   ).resolves.toMatchObject({ ok: true })
   expect(refreshSenders).toHaveBeenCalledOnce()
   expect(recordInteraction).toHaveBeenCalledWith('agent-orchestration')
+  const status = await dispatcher.dispatch({
+    id: 'rpc_selective_status',
+    authToken: 'test',
+    method: 'orchestration.requestShow',
+    params: { request: ack.orchestrationRequestId },
+    orchestrationCompatibilityEvidence: { terminalHandle: 'term_other' }
+  })
+  expect(status).toMatchObject({
+    ok: true,
+    result: { state: 'completed', method: 'orchestration.ackMessages' }
+  })
+  expect(status).not.toHaveProperty('result.receipt')
 })
 
 it('requires current launch proof for local selective calls to a token-launched pane', async () => {
   const { db, runtime } = harness.setup(false)
   const handle = 'term_coord'
   const launchToken = 'current-launch'
-  vi.mocked(runtime.getOrchestrationDispatchAuthority).mockReturnValue({
-    ...runtime.getOrchestrationDispatchAuthority(handle)!,
-    launchTokenHash: createHash('sha256').update(launchToken).digest('hex')
-  })
+  vi.mocked(runtime.getSelectiveAckPtyLaunchToken).mockReturnValue(launchToken)
   const selected = db.insertMessage({ from: 'sender', to: handle, subject: 'selective' })
   const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
   const request = {
@@ -409,6 +417,22 @@ it('requires current launch proof for local selective calls to a token-launched 
   await expect(dispatcher.dispatch(request)).resolves.toMatchObject(fenced)
 
   const remote = db.insertMessage({ from: 'sender', to: handle, subject: 'paired selective' })
+  vi.mocked(runtime.getSelectiveAckPtyLaunchToken).mockReturnValue(undefined)
+  await expect(
+    dispatcher.dispatch({
+      ...request,
+      orchestrationRequestId: 'unverified-restored-pane',
+      params: { ...request.params, ackIds: [remote.id] }
+    })
+  ).resolves.toMatchObject({
+    ok: false,
+    error: {
+      code: 'consumer_fenced',
+      message: expect.stringContaining('cannot verify this restored pane'),
+      data: { effectsApplied: false }
+    }
+  })
+  expect(db.getMessageById(remote.id)?.read).toBe(0)
   await expect(
     dispatcher.dispatch(
       { ...request, params: { ...request.params, ackIds: [remote.id] } },

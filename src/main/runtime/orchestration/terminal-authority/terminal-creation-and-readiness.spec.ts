@@ -7,6 +7,7 @@ import '../../construction/test-context/runtime-test-module-registration.spec'
 import { OrcaRuntimeService } from '../../orca-runtime'
 import '../../orca-runtime-test-mocks/setup.spec'
 import { makePaneKey } from '../../../../shared/workspace-layout/stable-pane-id'
+import { assertSelectiveAckCaller } from '../../rpc/orchestration/callers/selective-ack-caller'
 import {
   HEADLESS_LEAF_ID,
   RESTORED_AUTHORITY_TOKEN,
@@ -163,5 +164,33 @@ describe('OrcaRuntimeService', () => {
       paneKey,
       processIncarnation: `persisted-pty:${incarnationId}`
     })
+
+    const process = `persisted-pty:${incarnationId}`
+    const ack = (launchToken?: string) =>
+      assertSelectiveAckCaller(undefined, runtime, controllerHandle, process, {
+        paired: false,
+        evidence: { terminalHandle: controllerHandle, paneKey, launchToken }
+      })
+    expect(() => ack()).toThrow('cannot verify this restored pane')
+    expect(ack(RESTORED_AUTHORITY_TOKEN)).toMatchObject({
+      pty: { id: 'persisted-pty', launchTokenHash: RESTORED_AUTHORITY_TOKEN_HASH }
+    })
+
+    const daemonLaunchToken = 'daemon-retained-launch'
+    vi.spyOn(runtime, 'readLaunchedAgentForeground').mockResolvedValue('agent')
+    runtime.registerPty('persisted-pty', TEST_WORKTREE_ID, null, {
+      tabId: 'host-tab',
+      leafId: HEADLESS_LEAF_ID,
+      incarnationId,
+      providerReattachLaunchIdentity: { incarnationId, launchAgent: 'codex' },
+      reattach: {
+        launchNote: {
+          launchToken: daemonLaunchToken,
+          launchConfig: { agentCommand: 'codex', agentArgs: '', agentEnv: {} }
+        }
+      }
+    })
+    await vi.waitFor(() => expect(ack(daemonLaunchToken)).toHaveProperty('pty.id', 'persisted-pty'))
+    expect(() => ack(RESTORED_AUTHORITY_TOKEN)).toThrow('current agent pane launch token')
   })
 })

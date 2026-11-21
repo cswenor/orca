@@ -75,8 +75,16 @@ export class OrchestrationRequestEvidence {
     if (method.startsWith('orchestration.')) {
       const base = request.remote && !request.mutation ? this.remoteRead : this.orchestration
       const evidence = base.orchestrationCompatibilityEvidence
-      const mailboxLease =
-        method === 'orchestration.ackMessages' && !request.remote ? this.mailboxLease : undefined
+      if (method === 'orchestration.ackMessages' && request.remote) {
+        // A paired call targets a mailbox on the execution host, not the source shell's pane.
+        // Keep the session claim, if any, so structured callers still hit the host-boundary check.
+        const agentSessionId = evidence?.agentSessionId
+        return {
+          compatibilityInvocationId: request.requestId ?? base.compatibilityInvocationId,
+          orchestrationCompatibilityEvidence: agentSessionId ? { agentSessionId } : undefined
+        }
+      }
+      const mailboxLease = method === 'orchestration.ackMessages' ? this.mailboxLease : undefined
       return {
         ...base,
         compatibilityInvocationId: request.requestId ?? base.compatibilityInvocationId,

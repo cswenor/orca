@@ -4819,6 +4819,10 @@ const ORCHESTRATION_MESSAGING_AND_GATES_REFERENCE_MARKDOWN = [
   "not subject to that limitation.",
   "On the execution host, use selective acknowledgment from inside a token-launched",
   "agent pane. From outside that pane, use an ordinary check instead.",
+  "If Orca cannot verify a restored pane, use an ordinary check or a new pane.",
+  "`request-show` reports selective request status only; to recover its outcome,",
+  "run `check --ack-ids` with the same selection and `--retry-request` as the",
+  "original caller.",
   "",
 ].join('\n')
 

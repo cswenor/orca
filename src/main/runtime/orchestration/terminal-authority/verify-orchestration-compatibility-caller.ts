@@ -19,7 +19,7 @@ export abstract class OrcaRuntimeWithVerifyOrchestrationCompatibilityCaller exte
 
   verifyOrchestrationCompatibilityCaller(
     evidence: OrchestrationCompatibilityEvidence | null | undefined,
-    options?: { currentRuntimeLaunchSufficient?: boolean }
+    options?: { currentRuntimeLaunchSufficient?: boolean; selectiveAck?: boolean }
   ): OrchestrationCompatibilityCallerAuthority | null {
     const terminalHandle =
       typeof evidence?.terminalHandle === 'string' ? evidence.terminalHandle.trim() : ''
@@ -30,7 +30,8 @@ export abstract class OrcaRuntimeWithVerifyOrchestrationCompatibilityCaller exte
       return null
     }
     const sshHost = host?.kind === 'ssh' ? host : undefined
-    const bridged = sshHost ? this.verifyBridgedSshTerminal(sshHost) : undefined
+    const bridged =
+      sshHost && !options?.selectiveAck ? this.verifyBridgedSshTerminal(sshHost) : undefined
     if (sshHost && bridged) {
       // COMPAT(legacy-relay-bridge): no hook can attest a terminal this runtime does not host; the
       // bridge bound this one to its lease and Dispatch records for the attachment's one call.
@@ -54,10 +55,21 @@ export abstract class OrcaRuntimeWithVerifyOrchestrationCompatibilityCaller exte
     ) {
       return null
     }
+    const selectiveToken = options?.selectiveAck
+      ? this.getSelectiveAckPtyLaunchToken(terminal.ptyId)
+      : undefined
+    if (options?.selectiveAck && selectiveToken === null) {
+      return null
+    }
+    const liveLaunchTokenHash = options?.selectiveAck
+      ? selectiveToken
+        ? createHash('sha256').update(selectiveToken).digest('hex')
+        : null
+      : terminal.launchTokenHash
     const launchTokenHash = createHash('sha256').update(launchToken).digest('hex')
     let terminalProvenance: 'current_runtime' | 'restored'
-    if (terminal.launchTokenHash) {
-      if (launchTokenHash !== terminal.launchTokenHash) {
+    if (liveLaunchTokenHash) {
+      if (launchTokenHash !== liveLaunchTokenHash) {
         return null
       }
       terminalProvenance = 'current_runtime'
@@ -106,6 +118,23 @@ export abstract class OrcaRuntimeWithVerifyOrchestrationCompatibilityCaller exte
       terminalHandle,
       launchTokenHash
     )
+  }
+
+  /** Token when held by this incarnation, null for a confirmed shell, undefined if unknown. */
+  getSelectiveAckPtyLaunchToken(ptyId: string): string | null | undefined {
+    const pty = this.ptysById.get(ptyId)
+    const evidence = pty?.launchEvidence
+    if (!pty?.connected) {
+      return undefined
+    }
+    if (pty.launchToken && pty.launchIncarnationId === pty.incarnationId) {
+      return pty.launchToken
+    }
+    // Reattach re-proves daemon-held launch evidence against the incarnation and foreground agent.
+    if (evidence && evidence.kind !== 'unknown' && evidence.incarnationId === pty.incarnationId) {
+      return evidence.kind === 'held' ? evidence.token : null
+    }
+    return undefined
   }
 
   private verifyBridgedSshTerminal(

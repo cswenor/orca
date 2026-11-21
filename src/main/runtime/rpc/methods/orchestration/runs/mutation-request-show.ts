@@ -37,7 +37,10 @@ export const ORCHESTRATION_MUTATION_REQUEST_METHODS = [
         method: row.method,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
-        ...(row.receipt ? { receipt: parseReceipt(row.receipt) } : {}),
+        // Selective receipts contain mailbox contents; only the bound replay may return them.
+        ...(row.receipt && row.method !== 'orchestration.ackMessages'
+          ? { receipt: parseReceipt(row.receipt) }
+          : {}),
         interpretation: describeMutationRequestState({
           requestId: params.request,
           state: row.state,
