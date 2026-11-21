@@ -45,7 +45,14 @@ export class OrchestrationMailboxNotificationCoordinator<
     if (!waitForRedrives) {
       return undefined
     }
-    const pending = [terminal?.flight, structuredPointerDelivery?.whenIdle(handle)]
+    const pending: Promise<void>[] = []
+    if (terminal?.flight) {
+      pending.push(terminal.flight)
+    }
+    const structured = structuredPointerDelivery?.whenIdle(handle)
+    if (structured) {
+      pending.push(structured)
+    }
     if (terminal?.routing) {
       pending.push(
         structuredPointerDelivery
@@ -53,7 +60,7 @@ export class OrchestrationMailboxNotificationCoordinator<
           : terminal.routing.then(() => undefined)
       )
     }
-    return Promise.all(pending).then(() => undefined)
+    return pending.length > 1 ? Promise.all(pending).then(() => undefined) : pending[0]
   }
 
   deliverForTerminal(terminal: OrchestrationMailboxTerminal): void {
