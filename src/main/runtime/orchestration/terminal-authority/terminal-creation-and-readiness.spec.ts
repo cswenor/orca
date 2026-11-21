@@ -10,7 +10,12 @@ import { makePaneKey, parsePaneKey } from '../../../../shared/workspace-layout/s
 import { assertSelectiveAckCaller } from '../../rpc/orchestration/callers/selective-ack-caller'
 import { commitPtyIpcSpawn } from '../../../ipc/pty/ipc/spawn-commit'
 import { createPtyIpcSpawnState } from '../../../ipc/pty/ipc/spawn-state'
-import type { PtySpawnIpcDeps } from '../../../ipc/pty/ipc/spawn-types'
+import {
+  noCodexResumeLaunch,
+  reconcileSharedRuntimeResumeHome,
+  resolveCodexResumeLaunch,
+  stripSequencedStartupResumeArgv
+} from '../../../ipc/pty/host-env/codex-resume'
 import { unregisterPty } from '../../../memory/pty-registry'
 import {
   HEADLESS_LEAF_ID,
@@ -132,7 +137,23 @@ describe('OrcaRuntimeService', () => {
     registerLivePty(runtime, ptyId, TEST_WORKTREE_ID, null, pane)
     const launchToken = 'renderer-launch-token'
     const spawn = createPtyIpcSpawnState(
-      { runtime, sendPtySpawnedToRenderer: vi.fn() } as unknown as PtySpawnIpcDeps,
+      {
+        runtime,
+        prepareCodexResumeHome: () => null,
+        noCodexResumeLaunch,
+        resolveCodexResumeLaunch,
+        reconcileSharedRuntimeResumeHome,
+        stripSequencedStartupResumeArgv,
+        getLocalPtyStartupPromise: () => undefined,
+        adoptStablePane: async () => null,
+        assertWorkspaceAcceptsNewPty: vi.fn(),
+        resolvePtySpawnStartupCwd: (_worktree, cwd) => cwd,
+        transitionSpawnHiddenRendererPtyDeliveryState: vi.fn(),
+        trustedTerminalHandleEnv: new Set(),
+        sendPtySpawnedToRenderer: vi.fn(),
+        syncPtyBackgroundedDelivery: vi.fn(),
+        stopReplacedPty: vi.fn()
+      },
       {
         cols: 80,
         rows: 24,
