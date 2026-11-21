@@ -21,6 +21,8 @@ import { resolveMailboxCheckScope } from '../../methods/orchestration/messaging/
 import { resolveRunScope } from '../../methods/orchestration/runs/run-scope'
 import { legacyReadOnlyError } from '../compatibility/orchestration-legacy-process-identity'
 import type { DurableMutationInvocation } from './orchestration-mutation-executor'
+import { waitForStartupPhases } from '../../startup/startup-phase-wait'
+import { ORCHESTRATION_MAIL_RECONCILIATION_TIMEOUT_MS } from '../../../../../shared/orchestration/orchestration-timing-budgets'
 import {
   attachMutationReceipt,
   hashCanonical,
@@ -33,7 +35,8 @@ export async function runSelectiveAckMutation(
   params: unknown,
   invoke: (mutation: DurableMutationInvocation) => unknown,
   callerFingerprint: string | undefined,
-  caller: OrchestrationEntryCaller | undefined
+  caller: OrchestrationEntryCaller | undefined,
+  signal?: AbortSignal
 ): Promise<unknown> {
   const requestId = request.orchestrationRequestId
   if (!requestId) {
@@ -43,6 +46,7 @@ export async function runSelectiveAckMutation(
       { effectsApplied: false }
     )
   }
+  assertSelectiveAckConnected(signal)
   const db = runtime.getOrchestrationDb()
   const fingerprint = callerFingerprint ?? db.readLocalMutationCallerFingerprint()
   if (fingerprint === undefined) {
@@ -61,14 +65,26 @@ export async function runSelectiveAckMutation(
     }
     return receipt
   }
-  if (replayOnly) {
-    readReceipt()
-  }
-  const recovery = runtime.waitForOrchestrationStartupMailRecovery()
+  let existing = readReceipt()
+  // A replay only verifies current authority. It does not need to wait for unrelated mail.
+  const recovery = existing ? undefined : runtime.waitForOrchestrationStartupMailRecovery()
   if (recovery) {
-    await recovery
+    const outcome = await waitForStartupPhases(
+      [recovery],
+      ORCHESTRATION_MAIL_RECONCILIATION_TIMEOUT_MS,
+      [signal]
+    )
+    assertSelectiveAckConnected(signal)
+    if (outcome === 'timeout') {
+      throw new OrchestrationError(
+        'runtime_unavailable',
+        'Startup mailbox recovery is still running. No messages were acknowledged.',
+        { effectsApplied: false }
+      )
+    }
+    // A concurrent identical acknowledgment may have committed while this request waited.
+    existing = readReceipt()
   }
-  const existing = readReceipt()
   const readBinding = () => selectiveAckReceiptBinding(runtime, request, params, caller)
   const target = readBinding()
   const binding = hashCanonical(target)
@@ -102,6 +118,7 @@ export async function runSelectiveAckMutation(
   }
   const result = await invoke({
     recordReceipt: (receipt) => {
+      assertSelectiveAckConnected(signal)
       if (hashCanonical(readBinding()) !== binding) {
         throw new OrchestrationError('consumer_fenced', 'The selective mailbox caller changed.', {
           effectsApplied: false
@@ -117,6 +134,16 @@ export async function runSelectiveAckMutation(
     }
   })
   return attachMutationReceipt(result, requestId, false)
+}
+
+function assertSelectiveAckConnected(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new OrchestrationError(
+      'request_aborted',
+      'Selective acknowledgment was cancelled. No messages were acknowledged.',
+      { effectsApplied: false }
+    )
+  }
 }
 
 /** Read only: receipt replay must not route or take mail. */

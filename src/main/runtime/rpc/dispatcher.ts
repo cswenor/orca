@@ -296,7 +296,8 @@ export class RpcDispatcher {
       effectiveParams,
       invoke,
       callerFingerprint,
-      context.orchestrationCaller
+      context.orchestrationCaller,
+      context.signal
     )
     if (selectiveAck || isCallerProbe(request)) {
       return result

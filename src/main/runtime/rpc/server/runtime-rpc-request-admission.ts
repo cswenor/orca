@@ -12,7 +12,8 @@ import { LOCAL_CLI_RPC_CALLER } from '../callers/rpc-caller-identity'
 const DISCONNECT_FORWARDED_METHODS = new Set([
   'browser.eval',
   'linear.commentEdit',
-  'linear.commentDelete'
+  'linear.commentDelete',
+  'orchestration.ackMessages'
 ])
 
 export class RuntimeRpcRequestAdmission extends RuntimeRpcBinaryRouting {
