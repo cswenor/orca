@@ -31,18 +31,25 @@ export class OrchestrationMailboxPointerState {
   whenFlightSettledOrParked(
     ptyId: string,
     through: number,
-    messageId?: string
+    notice?: { id: string; type: string; queuedMailbox?: string }
   ): Promise<boolean> | undefined {
     const flight = this.flightsByPtyId.get(ptyId)
     if (
       !flight ||
       flight.oldestSequence > through ||
-      (messageId !== undefined && !flight.stagedMessageIds.includes(messageId)) ||
+      (notice &&
+        !flight.stagedMessageIds.includes(notice.id) &&
+        !this.hasQueuedNotice(ptyId, notice.queuedMailbox, notice.type)) ||
       (flight.deferredUntilIdle && flight.submitEnter)
     ) {
       return undefined
     }
     return (flight.startupCompletion ??= Promise.withResolvers<boolean>()).promise
+  }
+
+  private hasQueuedNotice(ptyId: string, mailbox: string | undefined, type: string): boolean {
+    const queued = mailbox === undefined ? undefined : this.parkedDeliveriesByPtyId.get(ptyId)
+    return mailbox !== undefined && queued?.has(mailbox) === true && !queued.get(mailbox)?.has(type)
   }
 
   beginFlight(ptyId: string, oldestSequence = 0): OrchestrationMailboxDeliveryFlight {

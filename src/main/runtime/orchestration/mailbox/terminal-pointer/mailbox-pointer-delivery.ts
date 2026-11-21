@@ -88,7 +88,15 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
       : undefined
     const flight = probe
       ? probe.then(() => true)
-      : this.state.whenFlightSettledOrParked(ptyId, through, notice?.id)
+      : this.state.whenFlightSettledOrParked(
+          ptyId,
+          through,
+          notice && {
+            id: notice.id,
+            type: notice.type,
+            queuedMailbox: unstaged ? mailbox : undefined
+          }
+        )
     return routing || flight ? { mailbox, routing, flight } : undefined
   }
 

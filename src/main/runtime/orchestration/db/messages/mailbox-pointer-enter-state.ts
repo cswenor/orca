@@ -80,7 +80,7 @@ export function stageMailboxPointerEnter(
             AND id IN (${placeholders})`,
         leadingParams: [MAILBOX_POINTER_RESERVED, target.ptyId, target.processIncarnation]
       }),
-      { requireAll: true }
+      'all'
     ) === ids.length
   )
 }
@@ -107,7 +107,7 @@ export function markMailboxPointerWriteAttempted(
           target.processIncarnation
         ]
       }),
-      { requireAll: true }
+      'all'
     ) === ids.length
   )
 }
@@ -117,6 +117,7 @@ export function markMailboxPointerEnterAttempted(
   ids: string[],
   target: MailboxPointerReservationTarget
 ): boolean {
+  // Reset or retention can remove already-typed mail. Still fence every row that survives.
   return (
     mutatePointerMessages(
       this,
@@ -135,8 +136,8 @@ export function markMailboxPointerEnterAttempted(
           target.processIncarnation
         ]
       }),
-      { requireAll: true }
-    ) === ids.length
+      'existing'
+    ) !== null
   )
 }
 
@@ -203,8 +204,8 @@ function mutatePointerMessages(
   db: OrchestrationDb,
   ids: string[],
   build: (placeholders: string) => { sql: string; leadingParams: (string | number)[] },
-  options?: { requireAll?: boolean }
-): number {
+  required?: 'all' | 'existing'
+): number | null {
   if (ids.length === 0) {
     return 0
   }
@@ -218,10 +219,20 @@ function mutatePointerMessages(
         db.db.prepare(mutation.sql).run(...mutation.leadingParams, ...batch).changes
       )
     }
-    if (options?.requireAll && changed !== ids.length) {
-      db.db.exec('ROLLBACK TO mailbox_pointer_enter_mutation')
-      db.db.exec('RELEASE mailbox_pointer_enter_mutation')
-      return 0
+    if (required && changed !== ids.length) {
+      const existing =
+        required === 'existing'
+          ? db.db
+              .prepare(
+                'SELECT count(*) AS count FROM messages WHERE id IN (SELECT value FROM json_each(?))'
+              )
+              .get(JSON.stringify(ids))?.count
+          : ids.length
+      if (changed !== existing) {
+        db.db.exec('ROLLBACK TO mailbox_pointer_enter_mutation')
+        db.db.exec('RELEASE mailbox_pointer_enter_mutation')
+        return null
+      }
     }
     db.db.exec('RELEASE mailbox_pointer_enter_mutation')
     return changed

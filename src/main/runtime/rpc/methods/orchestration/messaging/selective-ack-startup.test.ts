@@ -478,6 +478,59 @@ it('joins the PTY notice created by restored worker recovery', async () => {
   }
 })
 
+it('joins a recovery notice queued for automatic redrive behind an earlier PTY pointer', async () => {
+  vi.useFakeTimers()
+  const db = new OrchestrationDb(':memory:')
+  const precedingWrite = Promise.withResolvers<typeof WRITE_ACCEPTED>()
+  try {
+    const { runtime } = await createRuntime(db)
+    await driveToLiveIdle(runtime)
+    const write = vi.fn((_ptyId: string, _data: string) => true)
+    const precedingRun = createBoundRun(db, 'Preceding mailbox on the same PTY')
+    const noticeRun = createBoundRun(db, 'Recovery notice mailbox')
+    const precedingMailbox = `run:${precedingRun.id}`
+    const noticeMailbox = `run:${noticeRun.id}`
+    const precedingFlag = `--run ${precedingRun.id}`
+    runtime.setPtyController({
+      write,
+      writeWithSettlement: (ptyId, data) => {
+        write(ptyId, data)
+        return data.includes(precedingFlag) ? precedingWrite.promise : WRITE_ACCEPTED
+      },
+      kill: vi.fn(),
+      getForegroundProcess: async () => null
+    })
+    db.insertMessage({ from: 'term_sender', to: precedingMailbox, subject: 'Earlier mail' })
+    runtime.deliverPendingMessagesForHandle(precedingMailbox)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(pointerCount(write)).toBe(1)
+
+    const notice = db.insertMessage({
+      from: 'term_sender',
+      to: noticeMailbox,
+      subject: 'Recovery notice'
+    })
+    const recovered = vi.fn()
+    const recovery = runtime.notifyRestoredMessageArrived(noticeMailbox, notice.type, notice.id)
+    void recovery.then(recovered)
+    await vi.advanceTimersByTimeAsync(2_001)
+    expect(pointerCount(write)).toBe(1)
+    expect(recovered).not.toHaveBeenCalled()
+
+    precedingWrite.resolve(WRITE_ACCEPTED)
+    await vi.advanceTimersByTimeAsync(1_500)
+    await recovery
+    expect(pointerCount(write)).toBe(2)
+    expect(write.mock.calls.some(([, data]) => data.includes(`--run ${noticeRun.id}`))).toBe(true)
+    expect(write.mock.calls.filter(([, data]) => data === '\r')).toHaveLength(2)
+  } finally {
+    precedingWrite.resolve(WRITE_ACCEPTED)
+    await vi.advanceTimersByTimeAsync(1_500)
+    vi.useRealTimers()
+    db.close()
+  }
+})
+
 it('does not join a different mailbox pointer when repointing a settled recovery notice', async () => {
   vi.useFakeTimers()
   const db = new OrchestrationDb(':memory:')

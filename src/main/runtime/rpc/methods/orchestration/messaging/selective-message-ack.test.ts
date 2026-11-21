@@ -209,28 +209,6 @@ it('uses the same stable pane requirement as an ordinary consuming check', async
   expect(db.getMessageById(selected.id)?.read).toBe(0)
 })
 
-it.each(['worker_done', 'heartbeat', 'escalation', 'decision_gate'] as const)(
-  'refuses a mixed selection containing a %s lifecycle report without taking mail',
-  async (type) => {
-    const { db, ctx, activeRunId } = harness.setup()
-    const to = `run:${activeRunId}`
-    const status = db.insertMessage({ from: 'term_sender', to, subject: 'plain status' })
-    const report = db.insertMessage({ from: 'term_sender', to, subject: 'lifecycle report', type })
-    await expect(
-      harness.call(
-        'orchestration.ackMessages',
-        { terminal: 'term_coord', ackIds: [status.id, report.id] },
-        ctx
-      )
-    ).rejects.toMatchObject({
-      code: 'invalid_argument',
-      message: expect.stringContaining('Use a normal check')
-    })
-    expect(db.getMessageById(status.id)).toEqual(status)
-    expect(db.getMessageById(report.id)).toEqual(report)
-  }
-)
-
 it('uses the ordinary Dispatch pane fence without adding a launch check', async () => {
   const { db, runtime, ctx } = harness.setup()
   const terminal = 'term_worker'

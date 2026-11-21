@@ -5,6 +5,7 @@ import '../../db/contract-constants'
 import '../../db/messages/mailbox-routing-page'
 import '../../db/dispatch-row-writer'
 import '../../db/attempt-outcome-projection'
+import '../../db/reset/orchestration-reset'
 import {
   createBoundRun,
   createRuntime,
@@ -62,5 +63,30 @@ describe('orchestration typed pointer submission', () => {
     expect(pointerCount(harness.write)).toBe(2)
     expect(enterCount()).toBe(2)
     db.close()
+  })
+
+  it('submits an already-typed pointer after message reset and delivers the next wake', async () => {
+    vi.useFakeTimers()
+    const db = new OrchestrationDb(':memory:')
+    try {
+      const { runtime, write } = await createRuntime(db)
+      const run = createBoundRun(db, 'Reset Run')
+      insertDirectRunMessage(db, run.id, 'Reset before Enter')
+      await driveToLiveIdle(runtime)
+      expect(pointerCount(write)).toBe(1)
+      expect(write.mock.calls.some(([, payload]) => payload === '\r')).toBe(false)
+
+      db.resetMessages()
+      await vi.advanceTimersByTimeAsync(500)
+      expect(write.mock.calls.filter(([, payload]) => payload === '\r')).toHaveLength(1)
+
+      insertDirectRunMessage(db, run.id, 'Next wake')
+      runtime.deliverPendingMessagesForHandle(TERMINAL_HANDLE)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(pointerCount(write)).toBe(2)
+      expect(write.mock.calls.filter(([, payload]) => payload === '\r')).toHaveLength(2)
+    } finally {
+      db.close()
+    }
   })
 })
