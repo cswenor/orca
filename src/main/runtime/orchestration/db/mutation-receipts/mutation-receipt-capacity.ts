@@ -50,39 +50,42 @@ function receiptCount(db: Database.Database): number {
   return row.receipt_count
 }
 
-export function ensureMutationReceiptCapacity(db: Database.Database): void {
-  db.prepare(
-    `DELETE FROM mutation_receipts
-     WHERE state = 'completed'
-       AND updated_at < datetime('now', ?)`
-  ).run(`-${MUTATION_RECEIPT_MAX_AGE_DAYS} days`)
-
-  const count = receiptCount(db)
-  if (count >= MUTATION_RECEIPT_MAX_ROWS) {
+export function ensureMutationReceiptCapacity(
+  db: Database.Database,
+  retention: 'prune-completed' | 'preserve' = 'prune-completed'
+): void {
+  if (retention === 'prune-completed') {
     db.prepare(
       `DELETE FROM mutation_receipts
-       WHERE rowid IN (
-         SELECT rowid FROM mutation_receipts
-         WHERE state = 'completed'
-         ORDER BY updated_at ASC, rowid ASC
-         LIMIT ?
-       )`
-    ).run(count - MUTATION_RECEIPT_MAX_ROWS + MUTATION_RECEIPT_PRUNE_BATCH_SIZE)
+       WHERE state = 'completed'
+         AND updated_at < datetime('now', ?)`
+    ).run(`-${MUTATION_RECEIPT_MAX_AGE_DAYS} days`)
   }
+
+  const count = receiptCount(db)
+  if (count < MUTATION_RECEIPT_MAX_ROWS) {
+    return
+  }
+  if (retention === 'preserve') {
+    throw new OrchestrationError(
+      'mutation_ledger_full',
+      'The durable mutation ledger is full. Selective acknowledgment never prunes receipts.'
+    )
+  }
+  db.prepare(
+    `DELETE FROM mutation_receipts
+     WHERE rowid IN (
+       SELECT rowid FROM mutation_receipts
+       WHERE state = 'completed'
+       ORDER BY updated_at ASC, rowid ASC
+       LIMIT ?
+     )`
+  ).run(count - MUTATION_RECEIPT_MAX_ROWS + MUTATION_RECEIPT_PRUNE_BATCH_SIZE)
 
   if (receiptCount(db) >= MUTATION_RECEIPT_MAX_ROWS) {
     throw new OrchestrationError(
       'mutation_ledger_full',
       'The durable mutation ledger is full of unresolved operations. Resolve or inspect them before starting another mutation.'
-    )
-  }
-}
-
-export function assertSelectiveReceiptCapacity(db: Database.Database): void {
-  if (receiptCount(db) >= MUTATION_RECEIPT_MAX_ROWS) {
-    throw new OrchestrationError(
-      'mutation_ledger_full',
-      'The durable mutation ledger is full. Selective acknowledgment never prunes receipts.'
     )
   }
 }

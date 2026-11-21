@@ -1,10 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { MutationReceiptRow } from '../orchestration-records'
 import { OrchestrationError } from '../../orchestration-error'
-import {
-  assertSelectiveReceiptCapacity,
-  ensureMutationReceiptCapacity
-} from './mutation-receipt-capacity'
+import { ensureMutationReceiptCapacity } from './mutation-receipt-capacity'
 import type { OrchestrationDb } from '../orchestration-db'
 import { MUTATION_RECEIPT_COLUMN_LIST } from '../row-column-lists'
 
@@ -82,11 +79,7 @@ export function beginMutationReceipt(
       this.db.exec('COMMIT')
       return { disposition: existing.state, row: existing }
     }
-    if (complete) {
-      assertSelectiveReceiptCapacity(this.db)
-    } else {
-      ensureMutationReceiptCapacity(this.db)
-    }
+    ensureMutationReceiptCapacity(this.db, complete ? 'preserve' : 'prune-completed')
     const row = this.db
       .prepare(
         `INSERT INTO mutation_receipts (
