@@ -156,6 +156,7 @@ export class OrchestrationMailboxNotificationCoordinator<
       return
     }
     this.deps.resolveMessageWaiters(consumers)
+    return undefined
   }
 
   wakeRoutedMessageWaiters(mailboxHandle: string, types: readonly string[]): void {

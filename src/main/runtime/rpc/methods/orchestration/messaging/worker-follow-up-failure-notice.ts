@@ -34,7 +34,11 @@ export function noticeUnreadMailNotContinued(
       payload: { dispatchId, reason }
     },
     (handle, type) => {
-      recovery = runtime.notifyMessageArrived(handle, type, restoring)
+      if (restoring) {
+        recovery = runtime.notifyRestoredMessageArrived(handle, type)
+      } else {
+        runtime.notifyMessageArrived(handle, type)
+      }
     }
   )
   return recovery

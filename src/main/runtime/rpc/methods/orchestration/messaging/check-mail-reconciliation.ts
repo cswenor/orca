@@ -276,7 +276,7 @@ export class CheckMailReconciliation {
         args.record?.(args.respond(shared))
         return shared
       }
-      const batch = await this.reconcile({
+      const batch = await this.reconcile<MailboxDeliveryBatch | undefined>({
         selected: claim.messages,
         direct: false,
         claimId: claim.delivery.id,

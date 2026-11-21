@@ -183,10 +183,18 @@ export abstract class OrcaRuntimeWithRefreshFloatingWorkspacePtyLiveness extends
 
   // Keep the notification hook on the runtime as well as on the installed
   // command surface: exit escalation can wake an in-flight --wait directly.
-  notifyMessageArrived(
+  notifyMessageArrived(handle: string, messageType?: string): void {
+    this.notifyMailboxMessage(handle, messageType, false)
+  }
+
+  notifyRestoredMessageArrived(handle: string, messageType: string): Promise<void> | undefined {
+    return this.notifyMailboxMessage(handle, messageType, true)
+  }
+
+  private notifyMailboxMessage(
     handle: string,
-    messageType?: string,
-    waitForRecovery = false
+    messageType: string | undefined,
+    waitForRecovery: boolean
   ): Promise<void> | undefined {
     // Heartbeats are stored handled and only record liveness; they never wake a mailbox.
     if (messageType === 'heartbeat') {
