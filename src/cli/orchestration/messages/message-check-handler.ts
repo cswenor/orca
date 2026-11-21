@@ -27,6 +27,7 @@ import {
 import type { RuntimeStatus } from '../../../shared/remote-runtime/session-graph/runtime-session-contracts'
 import { AckMessagesParams } from '../../../shared/rpc-contract/orchestration/orchestration-params'
 import { ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY } from '../../../shared/orchestration/orchestration-runtime-capabilities'
+import { readInjectedAgentSessionId } from '../../../shared/agent-session/lifecycle/launch/agent-session-caller-env'
 
 type CheckResult = {
   messages: MessageSummary[]
@@ -111,7 +112,9 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
     )
     // Sessions use their injected id; inherited pane keys belong to a different caller.
     const paneKey =
-      explicitTerminal || terminal === undefined ? undefined : process.env.ORCA_PANE_KEY
+      !explicitTerminal && (terminal !== undefined || (ackIds && !readInjectedAgentSessionId()))
+        ? process.env.ORCA_PANE_KEY
+        : undefined
     if (ackIds) {
       const result = await callOrchestrationMutation<AckMessagesResult>(
         client,

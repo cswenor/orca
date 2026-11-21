@@ -64,6 +64,26 @@ describe('orchestration check identity', () => {
     expect(callMock.mock.calls.map(([method]) => method)).toEqual(['status.get'])
   })
 
+  it('submits the injected pane directly when no terminal handle is injected', async () => {
+    vi.stubEnv('ORCA_AGENT_SESSION_ID', undefined)
+    vi.stubEnv('ORCA_PANE_KEY', 'tab-orca:leaf-orca')
+    callMock
+      .mockResolvedValueOnce({
+        result: { capabilities: [ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY] }
+      })
+      .mockResolvedValueOnce({ result: { markedIds: ['msg_selected'], alreadyReadIds: [] } })
+    await invokeCheck(new Map([['ack-ids', 'msg_selected']]))
+    expect(callMock.mock.calls.map(([method]) => method)).toEqual([
+      'status.get',
+      'orchestration.ackMessages'
+    ])
+    expect(callMock.mock.calls[1]?.[1]).toMatchObject({
+      terminal: undefined,
+      terminalPaneKey: 'tab-orca:leaf-orca',
+      ackIds: ['msg_selected']
+    })
+  })
+
   it('rejects empty entries in --ack-ids before contacting the runtime', async () => {
     await expect(invokeCheck(new Map([['ack-ids', 'msg_selected,']]))).rejects.toMatchObject({
       code: 'invalid_argument'

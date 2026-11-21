@@ -33,19 +33,27 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
   private readonly coldParkedPtys = new Set<string>()
   constructor(private readonly deps: PointerDeliveryDependencies<TWaiter>) {}
 
-  deliverForHandle(handle: string, reservedTypes?: ReadonlySet<string>): void {
+  deliverForHandle(
+    handle: string,
+    reservedTypes?: ReadonlySet<string>,
+    waitForRouting = false
+  ): Promise<ReadonlySet<string>> | undefined {
     try {
       const terminal = this.deps.deliveryTarget.resolveTerminal(handle)
       // Skip ownership resolution, and the reconciliation it schedules, for a terminal deliver() would refuse.
       if (!terminal || !isMailboxTerminalTakingInput(terminal)) {
-        return
+        return undefined
       }
       const mailboxHandle = this.deps.mailboxOwner.resolve(terminal, handle)
       if (mailboxHandle) {
         this.deliver(terminal, { mailboxHandle, reservedTypes })
       }
+      return waitForRouting
+        ? this.deps.mailboxOwner.pendingDirectReconciliation(terminal.ptyId)
+        : undefined
     } catch {
       // Persisted mail remains available to explicit check or the terminal's next input edge.
+      return undefined
     }
   }
 

@@ -138,8 +138,8 @@ function selectiveAckReceiptBinding(
     )
   }
   const ackIds = params.ackIds.filter((id): id is string => typeof id === 'string')
-  const handle =
-    'terminal' in params && typeof params.terminal === 'string' ? params.terminal : 'unknown'
+  const terminal =
+    'terminal' in params && typeof params.terminal === 'string' ? params.terminal : undefined
   const terminalPaneKey =
     'terminalPaneKey' in params && typeof params.terminalPaneKey === 'string'
       ? params.terminalPaneKey
@@ -149,10 +149,10 @@ function selectiveAckReceiptBinding(
   const scope = resolveMailboxCheckScope(
     runtime,
     db,
-    { terminal: handle, terminalPaneKey, run, ackIds },
+    { terminal, terminalPaneKey, run, ackIds },
     caller
   )
-  const { livePane, paneKey } = scope
+  const { handle, livePane, paneKey } = scope
   // This is the authorized consumer snapshot, not a second origin check.
   const process = runtime.getTerminalProcessIncarnation(handle)
   const structuredSessionId =

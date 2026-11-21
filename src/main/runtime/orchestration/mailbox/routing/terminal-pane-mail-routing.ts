@@ -172,8 +172,8 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     })
   }
 
-  deliverPendingMessagesForHandle(handle: string, reservedTypes?: ReadonlySet<string>): void {
-    this.orchestrationMailboxNotifications.deliverForHandle(handle, reservedTypes)
+  deliverPendingMessagesForHandle(handle: string, types?: ReadonlySet<string>, wait = false) {
+    return this.orchestrationMailboxNotifications.deliverForHandle(handle, types, wait)
   }
 
   /** The structured idle edge: any journal movement is a chance to redrive parked mail. */
@@ -311,7 +311,7 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
           repoint(mailbox.mailboxHandle)
         }
         if (routed.completion) {
-          pending.add(owner.waitForDetachedRedrives(routed.completion, delivery))
+          pending.add(owner.waitForRoutingRedrives(routed.completion, delivery))
         }
         if (!routed.hasMore) {
           repoint(handle)
@@ -329,13 +329,10 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     waitForRedrive: boolean
   ): Promise<void> | undefined {
     try {
-      this.deliverPendingMessagesForHandle(handle)
-      if (waitForRedrive) {
-        return this.orchestrationStructuredMailboxPointerDelivery.whenIdle(handle)
-      }
+      return this.deliverPendingMessagesForHandle(handle, undefined, waitForRedrive)
     } catch {
       // The unref'd repair can outlive a test/runtime-owned database during shutdown.
+      return undefined
     }
-    return undefined
   }
 }

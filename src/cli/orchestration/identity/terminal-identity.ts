@@ -49,6 +49,10 @@ export async function resolveOrchestrationTerminalHandle(
     throw structuredSessionRefusal(flagName)
   }
   if (options.requireKnownHandle) {
+    if (process.env.ORCA_PANE_KEY) {
+      // The selective RPC resolves only previously issued handles for this pane.
+      return undefined
+    }
     throw new RuntimeClientError(
       'no_active_sender_terminal',
       'Selective acknowledgment needs an existing caller handle. Run it from the mailbox owner or pass its --terminal handle.'

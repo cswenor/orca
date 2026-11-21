@@ -49,7 +49,15 @@ export function resolveMailboxCheckScope(
   >,
   orchestrationCaller: OrchestrationEntryCaller | undefined
 ) {
-  const handle = params.terminal ?? 'unknown'
+  const paneOnly = params.ackIds && !params.terminal && params.terminalPaneKey
+  const handle = paneOnly
+    ? runtime.getExistingTerminalHandleForPaneKey(paneOnly)
+    : (params.terminal ?? 'unknown')
+  if (!handle) {
+    throw new OrchestrationError('consumer_fenced', 'No live pane caller. Pass --terminal.', {
+      effectsApplied: false
+    })
+  }
   if (params.ackIds && (handle.startsWith('run:') || handle.startsWith('dispatch:'))) {
     throw new OrchestrationError(
       'invalid_argument',

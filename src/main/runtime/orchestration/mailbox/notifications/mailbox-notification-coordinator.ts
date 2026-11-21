@@ -33,11 +33,24 @@ export class OrchestrationMailboxNotificationCoordinator<
 > {
   constructor(private readonly deps: NotificationCoordinatorDependencies<TWaiter>) {}
 
-  deliverForHandle(handle: string, reservedTypes?: ReadonlySet<string>): void {
-    if (this.deps.structuredPointerDelivery?.deliverForHandle(handle, reservedTypes)) {
-      return
+  deliverForHandle(
+    handle: string,
+    reservedTypes?: ReadonlySet<string>,
+    waitForRedrives = false
+  ): Promise<void> | undefined {
+    const { mailboxOwner, pointerDelivery, structuredPointerDelivery } = this.deps
+    const routing = structuredPointerDelivery?.deliverForHandle(handle, reservedTypes)
+      ? undefined
+      : pointerDelivery.deliverForHandle(handle, reservedTypes, waitForRedrives)
+    if (!waitForRedrives || !structuredPointerDelivery) {
+      return undefined
     }
-    this.deps.pointerDelivery.deliverForHandle(handle, reservedTypes)
+    const structured = structuredPointerDelivery.whenIdle(handle)
+    if (!routing) {
+      return structured
+    }
+    const routed = mailboxOwner.waitForRoutingRedrives(routing, structuredPointerDelivery)
+    return structured ? Promise.all([structured, routed]).then(() => undefined) : routed
   }
 
   deliverForTerminal(terminal: OrchestrationMailboxTerminal): void {

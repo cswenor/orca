@@ -268,8 +268,9 @@ export abstract class RuntimeConstructionServices extends RuntimeAgentStatusRead
   ): OrchestrationMailboxPointerSubmitTarget | null
   abstract deliverPendingMessagesForHandle(
     handle: string,
-    reservedTypes?: ReadonlySet<string>
-  ): void
+    reservedTypes?: ReadonlySet<string>,
+    waitForRedrives?: boolean
+  ): Promise<void> | undefined
   protected abstract writeOrchestrationPointerPty(
     ptyId: string,
     data: string

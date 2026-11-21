@@ -1,5 +1,6 @@
 import type { AgentStatus } from '../../../../../shared/agent-status/title/agent-title-core'
 import type { OrchestrationDb } from '../../db/orchestration-db'
+import { MailboxPtyReconciliation } from './mailbox-pty-reconciliation'
 
 /** A live terminal mail pointers are typed into, keyed by its PTY rather than any window pane. */
 export type OrchestrationMailboxTerminal = {
@@ -45,7 +46,9 @@ type OrchestrationMailboxOwnerDependencies = {
 }
 
 export class OrchestrationMailboxOwner {
-  private readonly pendingDirectReconciliations = new Set<string>()
+  private readonly directReconciliation = new MailboxPtyReconciliation((ptyId, notified) =>
+    this.reconcileDirectPage(ptyId, notified)
+  )
   private readonly pendingDetachedDirectReconciliations = new Map<
     string,
     Promise<ReadonlySet<string>>
@@ -147,7 +150,7 @@ export class OrchestrationMailboxOwner {
       db.routeForeignDirectMessagesToOwnedMailboxes?.(terminal.handle, ownerRunId, paneKey)
     )
     if (pages.some((routed) => routed?.hasMore)) {
-      this.scheduleDirectReconciliation(terminal)
+      this.directReconciliation.schedule(terminal.ptyId)
     }
     return pages.flatMap((routed) => routed?.mailboxes ?? [])
   }
@@ -162,7 +165,7 @@ export class OrchestrationMailboxOwner {
     return routed
   }
 
-  async waitForDetachedRedrives(
+  async waitForRoutingRedrives(
     completion: Promise<ReadonlySet<string>>,
     delivery: { whenIdle(mailbox: string): Promise<void> | undefined }
   ): Promise<void> {
@@ -179,6 +182,10 @@ export class OrchestrationMailboxOwner {
     if (pending.length) {
       await Promise.all(pending)
     }
+  }
+
+  pendingDirectReconciliation(ptyId: string): Promise<ReadonlySet<string>> | undefined {
+    return this.directReconciliation.completion(ptyId)
   }
 
   private routeDetachedDirectPage(
@@ -217,8 +224,9 @@ export class OrchestrationMailboxOwner {
     if (hasDirectMail) {
       const routed = db.routeUnreadDirectMessagesToRunMailbox?.(runId, terminalHandle)
       this.deps.onRoutedMessageTypes(runMailbox, routed?.types ?? [])
+      this.directReconciliation.record(terminal.ptyId, runMailbox)
       if (routed?.hasMore) {
-        this.scheduleDirectReconciliation(terminal)
+        this.directReconciliation.schedule(terminal.ptyId)
       }
     }
     return runMailbox
@@ -255,32 +263,26 @@ export class OrchestrationMailboxOwner {
         terminalHandle
       )
       this.deps.onRoutedMessageTypes(dispatchMailbox, routed?.types ?? [])
+      this.directReconciliation.record(terminal.ptyId, dispatchMailbox)
       if (routed?.hasMore) {
-        this.scheduleDirectReconciliation(terminal)
+        this.directReconciliation.schedule(terminal.ptyId)
       }
     }
     return dispatchMailbox
   }
 
-  private scheduleDirectReconciliation(terminal: OrchestrationMailboxTerminal): void {
-    const { ptyId } = terminal
-    if (this.pendingDirectReconciliations.has(ptyId)) {
+  private reconcileDirectPage(ptyId: string, notified: Set<string>): void {
+    const current = this.deps.getTerminal(ptyId)
+    if (!current) {
       return
     }
-    this.pendingDirectReconciliations.add(ptyId)
-    setImmediate(() => {
-      this.pendingDirectReconciliations.delete(ptyId)
-      const current = this.deps.getTerminal(ptyId)
-      if (!current) {
-        return
+    for (const routed of this.routeForeignDirectMessages(current)) {
+      notified.add(routed.mailboxHandle)
+      for (const type of routed.types) {
+        this.deps.onForeignMailboxRouted(routed.mailboxHandle, type)
       }
-      for (const routed of this.routeForeignDirectMessages(current)) {
-        for (const messageType of routed.types) {
-          this.deps.onForeignMailboxRouted(routed.mailboxHandle, messageType)
-        }
-      }
-      this.resolve(current)
-    })
+    }
+    this.resolve(current)
   }
 
   private scheduleDetachedDirectReconciliation(

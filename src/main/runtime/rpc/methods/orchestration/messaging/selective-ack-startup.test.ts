@@ -3,6 +3,13 @@ import { createOrchestrationRpcHarness } from '../rpc-test-harness'
 import { RpcDispatcher } from '../../../dispatcher'
 import { ORCHESTRATION_METHODS } from '../orchestration'
 import { ORCHESTRATION_CONTRACT_VERSION } from '../../../../../../shared/orchestration/orchestration-runtime-capabilities'
+import { OrchestrationMailboxOwner } from '../../../../orchestration/mailbox/routing/mailbox-owner'
+import { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
+import {
+  createBoundRun,
+  createRuntime,
+  PANE_KEY
+} from '../../../../orchestration/mailbox/terminal-pointer/orchestration-mailbox-notification-test-harness'
 
 const harness = createOrchestrationRpcHarness()
 afterEach(() => harness.cleanup())
@@ -149,4 +156,80 @@ it('acknowledges Run mail on a later page of restored mailbox routing', async ()
   expect(db.getMessageById(selected.id)).toMatchObject({ to_handle: `run:${activeRunId}`, read: 1 })
   expect(messages.filter((message) => db.getMessageById(message.id)?.read === 0)).toHaveLength(102)
   expect(db.getUnreadMessages(terminal)).toEqual([])
+})
+
+it('waits for every PTY routing page before acknowledging direct-addressed Run mail', async () => {
+  const { db, runtime, activeRunId } = harness.setup()
+  const mailbox = `run:${activeRunId}`
+  const terminal = {
+    ptyId: 'restored-pty',
+    handle: 'term_coord',
+    paneKeys: [harness.coordinatorPaneKey],
+    lastAgentStatus: null,
+    lastAgentStatusObservedLive: false
+  }
+  const owner = new OrchestrationMailboxOwner({
+    getDb: () => db,
+    getTerminal: () => terminal,
+    getTerminalProcessIncarnation: () => null,
+    onRoutedMessageTypes: () => {},
+    onForeignMailboxRouted: () => {}
+  })
+  const messages = Array.from({ length: 103 }, (_, index) =>
+    db.insertMessage({
+      from: 'term_sender',
+      to: mailbox,
+      runId: activeRunId,
+      subject: `PTY restore ${index}`
+    })
+  )
+  db.db.prepare('UPDATE messages SET to_handle = ?').run(terminal.handle)
+  owner.resolve(terminal, terminal.handle)
+  const selected = messages.findLast(
+    (message) => db.getMessageById(message.id)?.to_handle === terminal.handle
+  )!
+  const completion = owner.pendingDirectReconciliation(terminal.ptyId)
+  expect(completion).toBeDefined()
+  vi.spyOn(runtime, 'waitForOrchestrationStartupMailRecovery').mockImplementation(() =>
+    completion?.then(() => undefined)
+  )
+  await expect(
+    new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS }).dispatch({
+      id: 'rpc_restored_pty_mail',
+      authToken: 'test',
+      method: 'orchestration.ackMessages',
+      params: { terminal: terminal.handle, ackIds: [selected.id] },
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+      orchestrationRequestId: 'restored_pty_mail'
+    })
+  ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
+  expect(db.getMessageById(selected.id)).toMatchObject({ to_handle: mailbox, read: 1 })
+  expect(db.getUnreadMessages(terminal.handle)).toEqual([])
+})
+
+it('acknowledges from a pane-only caller with an already issued live terminal', async () => {
+  const db = new OrchestrationDb(':memory:')
+  try {
+    const { runtime, write } = await createRuntime(db)
+    const run = createBoundRun(db, 'Pane-only caller')
+    const selected = db.insertMessage({
+      from: 'term_sender',
+      to: `run:${run.id}`,
+      subject: 'Selected by pane'
+    })
+    await expect(
+      new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS }).dispatch({
+        id: 'rpc_pane_caller',
+        authToken: 'test',
+        method: 'orchestration.ackMessages',
+        params: { terminalPaneKey: PANE_KEY, ackIds: [selected.id] },
+        orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+        orchestrationRequestId: 'pane_caller'
+      })
+    ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
+    expect(db.getMessageById(selected.id)?.read).toBe(1)
+    expect(write).not.toHaveBeenCalled()
+  } finally {
+    db.close()
+  }
 })
