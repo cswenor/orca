@@ -2,7 +2,6 @@ import type { OrchestrationDb } from '../../../../orchestration/db/orchestration
 import { getMessagesByIds } from '../../../../orchestration/db/messages/messages-by-id'
 import { runOwnsDirectMessageSql } from '../../../../orchestration/db/runs/run-coordinator-mail-routing'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
-import { exposeMessages } from './mailbox-message-receipt'
 import { ORCHESTRATION_LEGACY_RUN_ID } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
 
 export function acknowledgeSelectedMessages(args: {
@@ -90,9 +89,6 @@ export function acknowledgeSelectedMessages(args: {
   const marked = new Set(markedIds)
   const response = {
     ...args.mailboxIdentity,
-    messages: exposeMessages(messages.map((message) => ({ ...message, read: 1 }))),
-    count: messages.length,
-    acknowledged: null,
     markedIds,
     alreadyReadIds: ids.filter((id) => !marked.has(id))
   }

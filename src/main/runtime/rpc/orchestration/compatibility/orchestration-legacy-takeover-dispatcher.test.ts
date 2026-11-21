@@ -259,6 +259,40 @@ describe('legacy compatibility after explicit takeover', () => {
     expect(db.getMessageById(mail.id)?.read).toBe(0)
   })
 
+  it('keeps a committed legacy coordinator binding read-only for selective ack', async () => {
+    const h = createHarness()
+    await expect(
+      h.dispatcher.dispatch(
+        request(
+          'orchestration.runUse',
+          { id: h.adoptedRunId, from: COORDINATOR_HANDLE },
+          evidence('coordinator'),
+          'bind-retained-coordinator'
+        )
+      )
+    ).resolves.toMatchObject({ ok: true })
+    const message = h.db.insertMessage({
+      from: 'sender',
+      to: `run:${h.adoptedRunId}`,
+      runId: h.adoptedRunId,
+      subject: 'keep retained coordinator mail unread'
+    })
+    await expect(
+      h.dispatcher.dispatch({
+        id: 'rpc_retained_selective',
+        authToken: 'test',
+        method: 'orchestration.ackMessages',
+        params: { terminal: COORDINATOR_HANDLE, ackIds: [message.id] },
+        orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+        orchestrationRequestId: 'retained-selective'
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'legacy_read_only', data: { effectsApplied: false } }
+    })
+    expect(h.db.getMessageById(message.id)?.read).toBe(0)
+  })
+
   it('does not fence an explicit current Run that reuses a historical pane', async () => {
     const h = createHarness()
     await expect(

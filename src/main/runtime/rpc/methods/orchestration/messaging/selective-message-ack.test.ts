@@ -381,6 +381,10 @@ it('only writes read state and a receipt, including on dispatcher replay', async
       })
     )
   }
+  // Even a valid replay discloses no stored mail contents.
+  for (const reply of results) {
+    expect(reply).not.toHaveProperty('result.messages')
+  }
   await expect(dispatcher.dispatch(retry)).resolves.toMatchObject({
     ok: true,
     result: { markedIds: [selected.id], mutation: { replayed: true } }

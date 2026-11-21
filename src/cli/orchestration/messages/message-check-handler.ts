@@ -39,8 +39,11 @@ type CheckResult = {
   connectionLost?: boolean
   legacyCompatibility?: LegacyCompatibilityResult
   next?: string
-  markedIds?: string[]
-  alreadyReadIds?: string[]
+}
+
+type AckMessagesResult = {
+  markedIds: string[]
+  alreadyReadIds: string[]
 }
 
 export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
@@ -99,7 +102,7 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
     const paneKey =
       explicitTerminal || terminal === undefined ? undefined : process.env.ORCA_PANE_KEY
     if (ackIds) {
-      const result = await callOrchestrationMutation<CheckResult>(
+      const result = await callOrchestrationMutation<AckMessagesResult>(
         client,
         flags,
         'orchestration.ackMessages',
@@ -115,7 +118,7 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
         result,
         json,
         (value) =>
-          `Marked read: ${value.markedIds?.join(', ') || '(none)'}\nAlready read: ${value.alreadyReadIds?.join(', ') || '(none)'}`
+          `Marked read: ${value.markedIds.join(', ') || '(none)'}\nAlready read: ${value.alreadyReadIds.join(', ') || '(none)'}`
       )
       return
     }

@@ -301,6 +301,36 @@ describe('orchestration detached mailbox routing', () => {
     db.close()
   })
 
+  it('finishes startup routing to a Dispatch whose terminal handle was reminted', async () => {
+    const db = createDatabase('orca-mailbox-restored-reminted-dispatch-')
+    const { runtime } = await createRuntime(db)
+    const run = db.createRun({
+      objective: 'Restored Dispatch Run',
+      coordinatorHandle: 'term_coordinator',
+      coordinatorPaneKey:
+        '55555555-5555-4555-8555-555555555555:66666666-6666-4666-8666-666666666666'
+    })
+    const task = db.createTask({ spec: 'Reminted worker', runId: run.id })
+    const dispatch = createRootDispatch(db, task.id, 'term_before_remint', PANE_KEY)
+    const message = db.insertMessage({
+      from: 'term_coordinator',
+      to: TERMINAL_HANDLE,
+      subject: 'Restored instruction after remint',
+      type: 'dispatch',
+      runId: run.id,
+      deliveryContract: 'current_delivery'
+    })
+
+    runtime.setOrchestrationDb(db)
+    await runtime.finishOrchestrationStartupMailRecovery()
+
+    expect(db.getMessageById(message.id)).toMatchObject({
+      to_handle: `dispatch:${dispatch.id}`,
+      read: 0
+    })
+    db.close()
+  })
+
   it('deduplicates Dispatch ownership before limiting a routing page', () => {
     const db = createDatabase('orca-mailbox-duplicate-dispatch-owners-')
     const run = db.createRun({

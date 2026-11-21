@@ -302,7 +302,8 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
           this.mailPointerRepointScheduler.schedule(handle)
           continue
         }
-        const routed = this.orchestrationMailboxOwner.routeDetachedDirectMessages(handle)
+        const paneKey = this.getPaneKeyForTerminalHandle(handle) ?? undefined
+        const routed = this.orchestrationMailboxOwner.routeDetachedDirectMessages(handle, paneKey)
         for (const mailbox of routed.mailboxes) {
           this.mailPointerRepointScheduler.schedule(mailbox.mailboxHandle)
         }

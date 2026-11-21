@@ -85,7 +85,9 @@ describe('orchestration check identity', () => {
         result: { capabilities: [ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY] }
       })
       if (available) {
-        callMock.mockResolvedValueOnce({ result: { markedIds: ['msg_selected'] } })
+        callMock.mockResolvedValueOnce({
+          result: { markedIds: ['msg_selected'], alreadyReadIds: [] }
+        })
       } else {
         callMock.mockRejectedValueOnce(
           new RuntimeClientError('method_not_found', 'Unknown RPC method')
@@ -95,7 +97,7 @@ describe('orchestration check identity', () => {
       if (available) {
         await outcome
         expect(printResultMock).toHaveBeenCalledWith(
-          { result: { markedIds: ['msg_selected'] } },
+          { result: { markedIds: ['msg_selected'], alreadyReadIds: [] } },
           true,
           expect.any(Function)
         )

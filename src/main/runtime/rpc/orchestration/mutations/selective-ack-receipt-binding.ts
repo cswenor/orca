@@ -17,6 +17,7 @@ import {
   resolveMailboxCheckScope
 } from '../../methods/orchestration/messaging/check-methods'
 import { resolveRunScope } from '../../methods/orchestration/runs/run-scope'
+import { legacyReadOnlyError } from '../compatibility/orchestration-legacy-process-identity'
 import type { DurableMutationInvocation } from './orchestration-mutation-executor'
 import {
   attachMutationReceipt,
@@ -193,6 +194,19 @@ function selectiveAckReceiptBinding(
     requireCurrentConsumer: true,
     callerEvidence: request.orchestrationCompatibilityEvidence
   })
+  // A retained binding stays legacy even if the request omits compatibility evidence.
+  if (
+    currentRun.coordinator_handle &&
+    currentRun.coordinator_pane_key &&
+    db.getLegacyAdoption()?.adopted_run_id === currentRun.id &&
+    db.resolveLegacyCoordinatorCandidate({
+      runId: currentRun.id,
+      terminalHandle: currentRun.coordinator_handle,
+      paneKey: currentRun.coordinator_pane_key
+    })
+  ) {
+    throw legacyReadOnlyError()
+  }
   const dispatch = !run ? db.getActiveDispatchForIdentity(handle, paneKey) : undefined
   let residual: [string, number] | undefined
   if (
