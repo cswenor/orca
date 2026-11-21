@@ -8,7 +8,8 @@ import { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import {
   createBoundRun,
   createRuntime,
-  PANE_KEY
+  PANE_KEY,
+  TERMINAL_HANDLE
 } from '../../../../orchestration/mailbox/terminal-pointer/orchestration-mailbox-notification-test-harness'
 
 const harness = createOrchestrationRpcHarness()
@@ -210,23 +211,27 @@ it('waits for every PTY routing page before acknowledging direct-addressed Run m
 it('acknowledges from a pane-only caller with an already issued live terminal', async () => {
   const db = new OrchestrationDb(':memory:')
   try {
-    const { runtime, write } = await createRuntime(db)
+    const { runtime, write } = await createRuntime(db, { launchAgent: null, headless: true })
+    expect(runtime.getExistingTerminalHandleForPaneKey(PANE_KEY)).toBe(TERMINAL_HANDLE)
     const run = createBoundRun(db, 'Pane-only caller')
     const selected = db.insertMessage({
       from: 'term_sender',
       to: `run:${run.id}`,
+      runId: run.id,
       subject: 'Selected by pane'
     })
-    await expect(
-      new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS }).dispatch({
-        id: 'rpc_pane_caller',
-        authToken: 'test',
-        method: 'orchestration.ackMessages',
-        params: { terminalPaneKey: PANE_KEY, ackIds: [selected.id] },
-        orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
-        orchestrationRequestId: 'pane_caller'
-      })
-    ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
+    const response = await new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS }).dispatch({
+      id: 'rpc_pane_caller',
+      authToken: 'test',
+      method: 'orchestration.ackMessages',
+      params: { terminalPaneKey: PANE_KEY, ackIds: [selected.id] },
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+      orchestrationRequestId: 'pane_caller'
+    })
+    if (!response.ok) {
+      throw new Error(`${response.error.code}: ${response.error.message}`)
+    }
+    expect(response.result).toMatchObject({ markedIds: [selected.id] })
     expect(db.getMessageById(selected.id)?.read).toBe(1)
     expect(write).not.toHaveBeenCalled()
   } finally {
