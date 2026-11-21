@@ -1,6 +1,6 @@
 import type { DispatchContextRow } from '../../../../orchestration/db/orchestration-records'
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
-import { hasCompetingActiveDispatch } from '../../../../orchestration/db/dispatch-context/dispatch-lookup'
+import { hasCompetingActiveDispatch } from '../../../../orchestration/db/dispatch-context/selective-dispatch-ambiguity'
 import { LEGACY_CONTRACT_VERSION } from '../../../../orchestration/db/contract-constants'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
 import { isEquivalentPaneKey } from '../../../../orchestration/db/pane-key-match'

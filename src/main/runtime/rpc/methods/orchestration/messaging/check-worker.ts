@@ -10,12 +10,8 @@ import {
   withReplyFollowUps
 } from './mailbox-message-receipt'
 import { routeAllMailboxPages, createDirectMailSnapshotRouter } from './mailbox-page-routing'
-import {
-  asDispatchFence,
-  callerHoldsDispatchPane,
-  dispatchFenced,
-  resolveCheckDispatch
-} from './dispatch-mailbox-fence'
+import { asDispatchFence, callerHoldsDispatchPane, dispatchFenced } from './dispatch-mailbox-fence'
+import { acknowledgeSelectedWorkerMail } from './selective-worker-ack'
 import { interruptedAcknowledgedCheck } from '../routing'
 import type { MessageWake } from '../../../../orchestration/mailbox/runtime-message-waiters'
 import { currentDispatchAssigneeRun } from './recipient-routing'
@@ -57,28 +53,7 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
       ? db.getDispatchContextById(workerMailbox.dispatchId)?.consumer_generation
       : db.getRemoteDispatchAttachment(workerMailbox.dispatchId)?.consumer_generation
   if (params.ackIds) {
-    return args.reconciliation.acknowledgeSelected({
-      mailbox: address,
-      ids: params.ackIds,
-      direct: false,
-      mailboxIdentity,
-      routeSource: activeDispatch
-        ? { caller: handle, assignee: activeDispatch.assignee_handle }
-        : undefined,
-      recordReceipt: args.recordMutationReceipt,
-      revalidateConsumer: () => {
-        args.revalidateCaller?.()
-        args.revalidateConsumer?.()
-        const current = resolveCheckDispatch(db, handle, paneKey, true)
-        if (
-          current?.id !== workerMailbox.dispatchId ||
-          current.consumer_generation !== workerMailbox.generation ||
-          !callerHoldsDispatchPane(current, paneKey)
-        ) {
-          throw dispatchFenced()
-        }
-      }
-    })
+    return acknowledgeSelectedWorkerMail(args, params.ackIds)
   }
   const routeDirectSnapshot = createDirectMailSnapshotRouter(db, signal)
   const revalidateWorkerMailbox = async (): Promise<void> => {
@@ -218,7 +193,27 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
       return undefined
     }
     const revalidate = () => {
-      revalidateWorkerConsumer()
+      args.revalidateCaller?.()
+      args.revalidateConsumer?.()
+      if (readCurrentGeneration() !== workerMailbox.generation) {
+        throw dispatchFenced()
+      }
+      if (activeDispatch) {
+        const current = db.getActiveDispatchForIdentity(handle, paneKey)
+        if (current?.id !== activeDispatch.id || !callerHoldsDispatchPane(current, paneKey)) {
+          throw dispatchFenced()
+        }
+      } else if (
+        !paneKey ||
+        db.findActiveRemoteAttachmentForPane(paneKey)?.dispatch_id !== workerMailbox.dispatchId ||
+        !db.isRemoteAttachmentProcessCurrent({
+          dispatchId: workerMailbox.dispatchId,
+          paneKey,
+          processIncarnation: runtime.getTerminalProcessIncarnation(handle)
+        })
+      ) {
+        throw dispatchFenced()
+      }
       if (args.deferDelivery?.()) {
         throw dispatchFenced()
       }
