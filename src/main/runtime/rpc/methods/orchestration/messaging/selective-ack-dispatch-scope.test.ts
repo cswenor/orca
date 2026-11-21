@@ -5,36 +5,41 @@ import { createOrchestrationRpcHarness } from '../rpc-test-harness'
 const harness = createOrchestrationRpcHarness()
 afterEach(() => harness.cleanup())
 
-it('does not hide a conflicting stable pane owner behind an exact pane match', async () => {
-  const { db, runtime, ctx } = harness.setup()
-  const leaf = '33333333-3333-4333-9333-333333333333'
-  const terminal = 'term_reminted'
-  vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(`tab_current:${leaf}`)
-  const seed = (suffix: string, paneKey: string) => {
-    const task = db.createTask({ spec: `task ${suffix}` })
-    const dispatch = createRootDispatch(db, task.id, `term_${suffix}`, paneKey)
-    return db.insertMessage({
-      from: 'term_coord',
-      to: `dispatch:${dispatch.id}`,
-      runId: dispatch.run_id,
-      subject: `mail ${suffix}`
+it.each([true, false])(
+  'refuses conflicting stable-pane owners with caller pane present: %s',
+  async (withCallerPane) => {
+    const { db, runtime, ctx } = harness.setup()
+    const leaf = '33333333-3333-4333-9333-333333333333'
+    const terminal = withCallerPane ? 'term_reminted' : 'term_second'
+    vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(
+      withCallerPane ? `tab_current:${leaf}` : null
+    )
+    const seed = (suffix: string, paneKey: string) => {
+      const task = db.createTask({ spec: `task ${suffix}` })
+      const dispatch = createRootDispatch(db, task.id, `term_${suffix}`, paneKey)
+      return db.insertMessage({
+        from: 'term_coord',
+        to: `dispatch:${dispatch.id}`,
+        runId: dispatch.run_id,
+        subject: `mail ${suffix}`
+      })
+    }
+    const other = seed('first', `tab_first:${leaf}`)
+    const newest = seed('second', 'tab_second:44444444-4444-4444-8444-444444444444')
+    // Model conflicting restored records, which current Dispatch creation already prevents.
+    db.db
+      .prepare('UPDATE dispatch_contexts SET assignee_pane_key = ? WHERE assignee_handle = ?')
+      .run(`tab_current:${leaf}`, 'term_second')
+    await expect(
+      harness.call('orchestration.ackMessages', { terminal, ackIds: [newest.id] }, ctx)
+    ).rejects.toMatchObject({
+      code: 'consumer_fenced',
+      message: expect.stringContaining('unambiguous Dispatch')
     })
+    expect(db.getMessageById(other.id)?.read).toBe(0)
+    expect(db.getMessageById(newest.id)?.read).toBe(0)
   }
-  const other = seed('first', `tab_first:${leaf}`)
-  const newest = seed('second', 'tab_second:44444444-4444-4444-8444-444444444444')
-  // Model conflicting restored records, which current Dispatch creation already prevents.
-  db.db
-    .prepare('UPDATE dispatch_contexts SET assignee_pane_key = ? WHERE assignee_handle = ?')
-    .run(`tab_current:${leaf}`, 'term_second')
-  await expect(
-    harness.call('orchestration.ackMessages', { terminal, ackIds: [newest.id] }, ctx)
-  ).rejects.toMatchObject({
-    code: 'consumer_fenced',
-    message: expect.stringContaining('unambiguous Dispatch')
-  })
-  expect(db.getMessageById(other.id)?.read).toBe(0)
-  expect(db.getMessageById(newest.id)?.read).toBe(0)
-})
+)
 
 it('refuses selective ack for a local worker whose Dispatch belongs to a peer Run', async () => {
   const { db, runtime, ctx } = harness.setup(false)

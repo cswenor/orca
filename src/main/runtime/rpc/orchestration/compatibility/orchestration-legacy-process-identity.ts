@@ -1,5 +1,22 @@
 import { parsePaneKey } from '../../../../../shared/workspace-layout/stable-pane-id'
 import { OrchestrationError } from '../../../orchestration/orchestration-error'
+import type { OrchestrationDb } from '../../../orchestration/db/orchestration-db'
+
+/** Reject the retained handle, not a different current caller using the historical pane. */
+export function assertNotRetainedLegacyHandle(
+  db: OrchestrationDb,
+  runId: string,
+  terminalHandle: string | undefined
+): void {
+  if (
+    terminalHandle &&
+    (db.isLegacyCoordinatorHandle(runId, terminalHandle) ||
+      db.resolveLegacyCompatibilityPrincipalByIdentity({ runId, role: 'worker', terminalHandle }) ||
+      db.resolveLegacyWorkerCandidate({ runId, terminalHandle }))
+  ) {
+    throw legacyReadOnlyError()
+  }
+}
 
 export function equivalentLegacyPaneKey(
   a: string | null | undefined,

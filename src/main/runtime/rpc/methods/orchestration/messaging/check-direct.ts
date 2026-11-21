@@ -10,6 +10,7 @@ import { staleDelivery } from '../../../../orchestration/db/messages/role-mailbo
 import { ORCHESTRATION_LEGACY_RUN_ID } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
 import type { MailboxCheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 import { runOwnsDirectMessageSql } from '../../../../orchestration/db/runs/run-coordinator-mail-routing'
+import { assertNotRetainedLegacyHandle } from '../../../orchestration/compatibility/orchestration-legacy-process-identity'
 
 function assertCurrentDirectMail(hasLegacyMail: boolean): void {
   if (hasLegacyMail) {
@@ -27,6 +28,10 @@ export function assertSelectableDirectMailbox(
   handle: string,
   unboundOnly: boolean
 ): void {
+  const adoption = db.getLegacyAdoption()
+  if (adoption) {
+    assertNotRetainedLegacyHandle(db, adoption.adopted_run_id, handle)
+  }
   if (!unboundOnly) {
     assertCurrentDirectMail(
       Boolean(

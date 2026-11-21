@@ -37,9 +37,11 @@ export function resolveCheckDispatch(
       { effectsApplied: false }
     )
   }
+  // A handle-only match still owns its recorded pane; check it for conflicting custody.
+  const knownPane = paneKey ?? dispatch.assignee_pane_key ?? undefined
   if (
-    !hasCompetingActiveDispatch(db, dispatch.id, handle, paneKey) &&
-    !(paneKey && db.findActiveRemoteAttachmentForPane(paneKey))
+    !hasCompetingActiveDispatch(db, dispatch.id, handle, knownPane) &&
+    !(knownPane && db.findActiveRemoteAttachmentForPane(knownPane))
   ) {
     return dispatch
   }

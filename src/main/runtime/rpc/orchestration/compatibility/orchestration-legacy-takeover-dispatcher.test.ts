@@ -444,6 +444,16 @@ describe('legacy compatibility after explicit takeover', () => {
         )
       )
     ).resolves.toMatchObject({ ok: false, error: { code: 'legacy_read_only' } })
+    await expect(
+      harness.dispatcher.dispatch(
+        request(
+          'orchestration.ackMessages',
+          { terminal: COORDINATOR_HANDLE, ackIds: [direct.id] },
+          undefined,
+          'refuse-displaced-implicit-coordinator'
+        )
+      )
+    ).resolves.toMatchObject({ ok: false, error: { code: 'legacy_read_only' } })
     expect(harness.db.getMessageById(direct.id)?.read).toBe(0)
     expect(harness.db.getMessageById(unrelated.id)).toMatchObject({
       to_handle: 'term_peer_worker',

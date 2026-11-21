@@ -15,6 +15,7 @@ import '../../../orchestration/db/attempt-outcome-projection'
 import type { RpcRequest } from '../../core'
 import { isSelectiveAckRequest } from '../callers/selective-ack-caller'
 import {
+  assertNotRetainedLegacyHandle,
   equivalentLegacyPaneKey,
   legacyCoordinatorReadOnly,
   legacyReadOnlyError
@@ -154,22 +155,8 @@ export class LegacyCompatibilityAuthority {
     const selective = isSelectiveAckRequest(request)
     if (unboundSelective) {
       const runId = adoption.adopted_run_id
-      // Explicit direct checks skip implicit legacy routing. Refuse a retained handle,
-      // not a different current caller using the same historical pane.
-      for (const handle of [evidence?.terminalHandle, terminalHandle]) {
-        if (
-          handle &&
-          (db.isLegacyCoordinatorHandle(runId, handle) ||
-            db.resolveLegacyCompatibilityPrincipalByIdentity({
-              runId,
-              role: 'worker',
-              terminalHandle: handle
-            }) ||
-            db.resolveLegacyWorkerCandidate({ runId, terminalHandle: handle }))
-        ) {
-          throw legacyReadOnlyError()
-        }
-      }
+      assertNotRetainedLegacyHandle(db, runId, evidence?.terminalHandle)
+      assertNotRetainedLegacyHandle(db, runId, terminalHandle)
       return undefined
     }
     const existingWorker = db.resolveLegacyCompatibilityPrincipalByIdentity({
