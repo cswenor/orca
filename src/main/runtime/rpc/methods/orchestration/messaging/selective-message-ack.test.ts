@@ -218,7 +218,9 @@ it('uses the ordinary Dispatch pane fence without adding a launch check', async 
 it('only writes read state and a receipt, including on dispatcher replay', async () => {
   const { db, runtime } = harness.setup(false)
   const fingerprint = db.readLocalMutationCallerFingerprint()
-  expect(fingerprint).toEqual(expect.any(String))
+  if (!fingerprint) {
+    throw new Error('Expected a local caller fingerprint before any request')
+  }
   const selected = db.insertMessage({ from: 'sender', to: 'term_coord', subject: 'unread' })
   db.db
     .prepare(
