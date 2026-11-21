@@ -102,7 +102,10 @@ export abstract class RuntimeConstructionServices extends RuntimeAgentStatusRead
     }
   ): void
   protected abstract readonly ptysById: ReadonlyMap<string, RuntimePtyWorktreeRecord>
-  protected abstract repointPendingMessagesForHandle(handle: string): void
+  protected abstract repointPendingMessagesForHandle(
+    handle: string,
+    waitForRedrive: boolean
+  ): void | Promise<void>
   protected abstract getPtyWriteHostPlatform(ptyId: string): NodeJS.Platform
   protected abstract getPtyAgent(ptyId: string): TerminalAgent | null
   protected abstract getAdoptedPtyExplicitIdleStatus(

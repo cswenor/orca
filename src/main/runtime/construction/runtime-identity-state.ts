@@ -321,8 +321,8 @@ export abstract class OrcaRuntimeWithRuntimeId extends RuntimeBotConstructionHoo
     }
   >()
 
-  protected readonly mailPointerRepointScheduler = new MailPointerRepointScheduler((handle) =>
-    this.repointPendingMessagesForHandle(handle)
+  protected readonly mailPointerRepointScheduler = new MailPointerRepointScheduler(
+    (handle, waitForRedrive) => this.repointPendingMessagesForHandle(handle, waitForRedrive)
   )
 
   protected abstract readonly syntheticTerminalHandles: TerminalIdentitySource['synthetic']

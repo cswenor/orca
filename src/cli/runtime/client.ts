@@ -8,8 +8,7 @@ import { runtimeHostConnectionState } from '../../shared/remote-runtime/host-sta
 import {
   isDurableMutation,
   isOrchestrationMutation,
-  isTerminalPromptMutation,
-  orchestrationMigrationData
+  isTerminalPromptMutation
 } from '../../shared/orchestration/orchestration-rpc-contract'
 import type { PairedRuntimeConnection } from '../../shared/remote-runtime/pairing/paired-runtime-connection'
 import { openLocalOrca } from './app-launch/open-local-orca'
@@ -34,11 +33,9 @@ import {
   type RuntimeSourceFence
 } from './connection/runtime-source-fence'
 import { resolveRemoteConnection } from './pairing/runtime-remote-pairing'
-import {
-  ORCHESTRATION_CONTRACT_RUNTIME_CAPABILITY,
-  ORCHESTRATION_CONTRACT_VERSION
-} from '../../shared/orchestration/orchestration-runtime-capabilities'
+import { ORCHESTRATION_CONTRACT_VERSION } from '../../shared/orchestration/orchestration-runtime-capabilities'
 import { RemoteRuntimeCompatGate } from './connection/remote-runtime-compat-gate'
+import { assertOrchestrationContractCompatible } from './connection/orchestration-contract-compat'
 import { OrchestrationRequestEvidence } from '../orchestration/identity/orchestration-compatibility-envelope'
 import * as requestTimeout from './connection/runtime-request-timeout'
 import {
@@ -127,7 +124,7 @@ export class RuntimeClient {
     }
     if (orchestrationMutation) {
       try {
-        await this.ensureOrchestrationContractCompatible(effectiveTimeoutMs)
+        await this.ensureOrchestrationContractCompatible(effectiveTimeoutMs, options)
       } catch (error) {
         // A caller-chosen request id is the only rerun handle, so keep it when the probe fails first.
         throw options?.orchestrationRequestId
@@ -159,7 +156,8 @@ export class RuntimeClient {
           params,
           timeoutMs: effectiveTimeoutMs,
           envelope,
-          requestSelection: options?.requestSelection
+          requestSelection: options?.requestSelection,
+          recordEnvironmentUsage: options?.recordEnvironmentUsage
         })
       } catch (error) {
         throw recover(error, null)
@@ -167,7 +165,7 @@ export class RuntimeClient {
       if (response.ok === false) {
         throw recover(new RuntimeRpcFailureError(response), null)
       }
-      if (this.environmentSelector) {
+      if (this.environmentSelector && options?.recordEnvironmentUsage !== false) {
         recordRuntimeEnvironmentUsage(this.userDataPath, this.environmentSelector, {
           runtimeId: response._meta.runtimeId
         })
@@ -279,31 +277,33 @@ export class RuntimeClient {
     return getOfflineRuntimeAdmission(this.userDataPath)
   }
 
-  private async ensureOrchestrationContractCompatible(timeoutMs: number): Promise<void> {
+  private ensureOrchestrationContractCompatible(
+    timeoutMs: number,
+    options?: RuntimeCallOptions
+  ): Promise<void> {
     if (!this.orchestrationContractCheck) {
       this.orchestrationContractCheck = this.checkOrchestrationContractCompatibility(
-        timeoutMs
+        timeoutMs,
+        options?.recordEnvironmentUsage
       ).catch((error: unknown) => {
         // Failed probes must be retried after transient outages.
         this.orchestrationContractCheck = null
         throw error
       })
     }
-    await this.orchestrationContractCheck
+    return this.orchestrationContractCheck
   }
 
-  private async checkOrchestrationContractCompatibility(timeoutMs: number): Promise<void> {
-    const response = await this.call<RuntimeStatus>('status.get', undefined, { timeoutMs })
+  private async checkOrchestrationContractCompatibility(
+    timeoutMs: number,
+    recordEnvironmentUsage?: false
+  ): Promise<void> {
+    const options = { timeoutMs, recordEnvironmentUsage }
+    const response = await this.call<RuntimeStatus>('status.get', undefined, options)
     if (this.remoteSelected) {
       this.remoteCompat.noteVerifiedStatus(response.result)
     }
-    if (!response.result.capabilities?.includes(ORCHESTRATION_CONTRACT_RUNTIME_CAPABILITY)) {
-      throw new RuntimeClientError(
-        'orchestration_migration_required',
-        'The connected Orca runtime does not support the current orchestration contract. No effects were applied.',
-        orchestrationMigrationData('runtime_capability_missing')
-      )
-    }
+    assertOrchestrationContractCompatible(response.result)
   }
 
   async openOrca(timeoutMs = 15_000): Promise<RuntimeRpcSuccess<CliStatusResult>> {

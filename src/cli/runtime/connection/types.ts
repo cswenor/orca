@@ -7,6 +7,7 @@ import { redactOrchestrationCompatibilitySecrets } from '../../../shared/orchest
 
 export type RuntimeCallOptions = {
   timeoutMs?: number
+  recordEnvironmentUsage?: false
   legacyTerminalPrompt?: true
   terminalPromptPreflight?: { runtimeId: string | null }
   requestSelection?: RuntimeRequestSelection

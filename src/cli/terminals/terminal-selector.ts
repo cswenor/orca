@@ -7,16 +7,23 @@ export async function getTerminalHandle(
   flags: Map<string, string | boolean>,
   cwd: string,
   client: RuntimeClient,
-  options: { requireUnambiguous?: boolean; purpose?: WorkspaceSelectionPurpose } = {}
+  options: {
+    requireUnambiguous?: boolean
+    purpose?: WorkspaceSelectionPurpose
+    recordEnvironmentUsage?: false
+  } = {}
 ): Promise<string> {
   const explicit = getPresentStringFlag(flags, 'terminal')
   if (explicit) {
     return explicit
   }
   const worktree = await getBrowserWorktreeSelector(flags, cwd, client, options.purpose)
-  const response = await client.call<{ handle: string }>('terminal.resolveActive', {
-    worktree,
-    ...(options.requireUnambiguous ? { requireUnambiguous: true } : {})
-  })
+  const params = { worktree, ...(options.requireUnambiguous ? { requireUnambiguous: true } : {}) }
+  const response =
+    options.recordEnvironmentUsage === false
+      ? await client.call<{ handle: string }>('terminal.resolveActive', params, {
+          recordEnvironmentUsage: false
+        })
+      : await client.call<{ handle: string }>('terminal.resolveActive', params)
   return response.result.handle
 }

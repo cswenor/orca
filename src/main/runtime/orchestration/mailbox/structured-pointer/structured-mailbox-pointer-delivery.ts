@@ -24,6 +24,7 @@ import { StructuredMailboxParking } from '../structured-mail/structured-mailbox-
 import { ownerAdjustedOwed, selectOwnedMail } from '../../structured-mail-owner-narrowing'
 import { StructuredMailSettledState } from '../structured-mail/structured-mail-settled-state'
 import * as mailCustody from '../structured-mail/structured-mail-custody'
+import { StructuredMailboxRedriveState } from './structured-mailbox-redrive-state'
 
 export type StructuredPointerTarget = {
   sessionId: string
@@ -36,9 +37,7 @@ type AdmitStep = 'next' | 'park'
 export class OrchestrationStructuredMailboxPointerDelivery<
   TWaiter extends OrchestrationMessageWaiter
 > {
-  private readonly inFlight = new Set<string>()
-  /** Edges that arrived during a pass: one more pass runs after it, so none is lost. */
-  private readonly rerun = new Map<string, Set<string>>()
+  private readonly redrives = new StructuredMailboxRedriveState()
   private readonly parking = new StructuredMailboxParking({
     watchJournal: (sessionId, onActivity) => this.deps.host.watchJournal(sessionId, onActivity),
     onActivity: (sessionId) => this.onJournalActivity(sessionId)
@@ -63,7 +62,7 @@ export class OrchestrationStructuredMailboxPointerDelivery<
     // Earlier sends are settled even when no chat owns the mailbox now; only an owner is sent to.
     if (!target && !mailCustody.hasStructuredMailSends(this.deps.getDb(), mailboxHandle)) {
       // A still-running pass forgets itself after observing cleanup.
-      if (!this.inFlight.has(mailboxHandle)) {
+      if (!this.redrives.isInFlight(mailboxHandle)) {
         this.settledState.forget(mailboxHandle)
       }
       return false
@@ -72,6 +71,11 @@ export class OrchestrationStructuredMailboxPointerDelivery<
       // Durable mail stays available to an explicit check or the next settle edge.
     })
     return target !== null
+  }
+
+  /** Startup waits for the existing redrive, including any queued follow-through. */
+  whenIdle(mailboxHandle: string): Promise<void> | undefined {
+    return this.redrives.whenIdle(mailboxHandle)
   }
 
   /** Retry mail parked on this session's settlement or reattach journal edge. */
@@ -133,13 +137,9 @@ export class OrchestrationStructuredMailboxPointerDelivery<
   }
 
   private async deliver(mailboxHandle: string, reservedTypes?: ReadonlySet<string>): Promise<void> {
-    if (this.inFlight.has(mailboxHandle)) {
-      const reserved = this.rerun.get(mailboxHandle) ?? new Set<string>()
-      reservedTypes?.forEach((type) => reserved.add(type))
-      this.rerun.set(mailboxHandle, reserved)
+    if (!this.redrives.begin(mailboxHandle, reservedTypes)) {
       return
     }
-    this.inFlight.add(mailboxHandle)
     try {
       await this.pass(mailboxHandle, reservedTypes)
     } catch (error) {
@@ -148,10 +148,8 @@ export class OrchestrationStructuredMailboxPointerDelivery<
       this.settledState.forget(mailboxHandle)
       throw error
     } finally {
-      this.inFlight.delete(mailboxHandle)
-      const rerun = this.rerun.get(mailboxHandle)
+      const rerun = this.redrives.finish(mailboxHandle)
       if (rerun) {
-        this.rerun.delete(mailboxHandle)
         void this.deliver(mailboxHandle, rerun.size > 0 ? rerun : undefined).catch(() => undefined)
       }
     }

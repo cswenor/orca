@@ -18,7 +18,7 @@ export async function resolveOrchestrationTerminalHandle(
   cwd: string,
   client: RuntimeClient,
   flagName: 'from' | 'terminal',
-  options: { validateEnvHandle?: boolean } = {}
+  options: { validateEnvHandle?: boolean; recordEnvironmentUsage?: false } = {}
 ): Promise<string | undefined> {
   // CLI entry already fences caller flags using the command spec.
   const explicit = getPresentStringFlag(flags, flagName)
@@ -48,7 +48,12 @@ export async function resolveOrchestrationTerminalHandle(
   if (hasStructuredSessionMarker()) {
     throw structuredSessionRefusal(flagName)
   }
-  return await resolveImplicitOrchestrationCaller(cwd, client, flagName)
+  return await resolveImplicitOrchestrationCaller(
+    cwd,
+    client,
+    flagName,
+    options.recordEnvironmentUsage
+  )
 }
 
 // terminal.show requires a PTY; resolveIdentity also recognizes structured workers without panes.
@@ -179,13 +184,15 @@ export async function resolveCoordinatorTerminalHandle(
 async function resolveImplicitOrchestrationCaller(
   cwd: string,
   client: RuntimeClient,
-  flagName: 'from' | 'terminal'
+  flagName: 'from' | 'terminal',
+  recordEnvironmentUsage?: false
 ): Promise<string> {
   try {
     // An arbitrary active-terminal choice would let this command speak as a sibling worker.
     return await getTerminalHandle(callerScopeFlags(), cwd, client, {
       requireUnambiguous: true,
-      purpose: 'orchestration-caller'
+      purpose: 'orchestration-caller',
+      ...(recordEnvironmentUsage === false ? { recordEnvironmentUsage } : {})
     })
   } catch (err) {
     if (!isNoActiveTerminalError(err)) {

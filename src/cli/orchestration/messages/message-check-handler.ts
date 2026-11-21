@@ -80,7 +80,9 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
           '--ack-ids requires a comma-separated list of nonempty message IDs.'
         )
       }
-      const status = await client.call<RuntimeStatus>('status.get')
+      const status = await client.call<RuntimeStatus>('status.get', undefined, {
+        recordEnvironmentUsage: false
+      })
       if (!status.result.capabilities?.includes(ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY)) {
         throw new RuntimeClientError(
           'incompatible_runtime',
@@ -97,7 +99,13 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
     }
     const timeoutMs = getOptionalPositiveIntegerValueFlag(flags, 'timeout-ms')
     const explicitTerminal = getOptionalStringFlag(flags, 'terminal')
-    const terminal = await resolveOrchestrationTerminalHandle(flags, cwd, client, 'terminal')
+    const terminal = await resolveOrchestrationTerminalHandle(
+      flags,
+      cwd,
+      client,
+      'terminal',
+      ackIds ? { recordEnvironmentUsage: false } : undefined
+    )
     // Sessions use their injected id; inherited pane keys belong to a different caller.
     const paneKey =
       explicitTerminal || terminal === undefined ? undefined : process.env.ORCA_PANE_KEY
@@ -112,7 +120,8 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
           run: getPresentStringFlag(flags, 'run'),
           ackIds,
           ...(flags.has('retry-request') ? { replayOnly: true } : {})
-        }
+        },
+        { recordEnvironmentUsage: false }
       )
       printResult(
         result,

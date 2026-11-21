@@ -45,6 +45,7 @@ export class RemoteRuntimeCompatGate {
     timeoutMs: number
     envelope?: RuntimeOrchestrationEnvelope
     requestSelection?: RuntimeRequestSelection
+    recordEnvironmentUsage?: false
   }): Promise<RuntimeRpcResponse<TResult>> {
     // A recipe VM's server is gone while the VM sleeps; only the desktop that owns it can wake it.
     if (
@@ -82,7 +83,7 @@ export class RemoteRuntimeCompatGate {
           throw new RuntimeRpcFailureError(response)
         }
         this.noteVerifiedStatus(response.result)
-        if (this.environmentSelector) {
+        if (this.environmentSelector && args.recordEnvironmentUsage !== false) {
           recordRuntimeEnvironmentUsage(this.userDataPath, this.environmentSelector, {
             runtimeId: response._meta.runtimeId
           })

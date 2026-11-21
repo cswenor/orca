@@ -301,7 +301,7 @@ describe('orchestration detached mailbox routing', () => {
     db.close()
   })
 
-  it('finishes startup routing to a Dispatch whose terminal handle was reminted', async () => {
+  it('does not eagerly readdress reminted Dispatch mail on database open', async () => {
     const db = createDatabase('orca-mailbox-restored-reminted-dispatch-')
     const { runtime } = await createRuntime(db)
     const run = db.createRun({
@@ -311,7 +311,7 @@ describe('orchestration detached mailbox routing', () => {
         '55555555-5555-4555-8555-555555555555:66666666-6666-4666-8666-666666666666'
     })
     const task = db.createTask({ spec: 'Reminted worker', runId: run.id })
-    const dispatch = createRootDispatch(db, task.id, 'term_before_remint', PANE_KEY)
+    createRootDispatch(db, task.id, 'term_before_remint', PANE_KEY)
     const message = db.insertMessage({
       from: 'term_coordinator',
       to: TERMINAL_HANDLE,
@@ -322,12 +322,7 @@ describe('orchestration detached mailbox routing', () => {
     })
 
     runtime.setOrchestrationDb(db)
-    await runtime.finishOrchestrationStartupMailRecovery()
-
-    expect(db.getMessageById(message.id)).toMatchObject({
-      to_handle: `dispatch:${dispatch.id}`,
-      read: 0
-    })
+    expect(db.getMessageById(message.id)).toMatchObject({ to_handle: TERMINAL_HANDLE, read: 0 })
     db.close()
   })
 

@@ -295,36 +295,48 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
       console.warn('[orchestration] failed to scan restored mailboxes', error)
       return
     }
-    let pending: Promise<void>[] | undefined
+    let pending: Set<Promise<void>> | undefined
+    const waitFor = (completion: Promise<void>) => {
+      pending ??= new Set()
+      pending.add(completion)
+    }
+    const repoint = (handle: string) => {
+      this.mailPointerRepointScheduler.schedule(handle)
+      waitFor(this.mailPointerRepointScheduler.completion(handle))
+    }
     for (const handle of handles) {
       try {
         if (handle.startsWith('run:') || handle.startsWith('dispatch:')) {
-          this.mailPointerRepointScheduler.schedule(handle)
+          repoint(handle)
           continue
         }
-        const paneKey = this.getPaneKeyForTerminalHandle(handle) ?? undefined
-        const routed = this.orchestrationMailboxOwner.routeDetachedDirectMessages(handle, paneKey)
+        const routed = this.orchestrationMailboxOwner.routeDetachedDirectMessages(handle)
         for (const mailbox of routed.mailboxes) {
-          this.mailPointerRepointScheduler.schedule(mailbox.mailboxHandle)
+          repoint(mailbox.mailboxHandle)
         }
         if (routed.completion) {
-          pending ??= []
-          pending.push(routed.completion)
+          waitFor(routed.completion)
         }
         if (!routed.hasMore) {
-          this.mailPointerRepointScheduler.schedule(handle)
+          repoint(handle)
         }
       } catch (error) {
         console.warn(`[orchestration] failed to restore mailbox ${handle}`, error)
-        this.mailPointerRepointScheduler.schedule(handle)
+        repoint(handle)
       }
     }
     return pending && Promise.all(pending).then(() => undefined)
   }
 
-  protected repointPendingMessagesForHandle(handle: string): void {
+  protected repointPendingMessagesForHandle(
+    handle: string,
+    waitForRedrive: boolean
+  ): void | Promise<void> {
     try {
       this.deliverPendingMessagesForHandle(handle)
+      if (waitForRedrive) {
+        return this.orchestrationStructuredMailboxPointerDelivery.whenIdle(handle)
+      }
     } catch {
       // The unref'd repair can outlive a test/runtime-owned database during shutdown.
     }
