@@ -337,5 +337,6 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     } catch {
       // The unref'd repair can outlive a test/runtime-owned database during shutdown.
     }
+    return undefined
   }
 }
