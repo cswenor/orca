@@ -182,6 +182,30 @@ it.each([
   }
 )
 
+it('refuses direct acknowledgment from a completed legacy worker handle without a principal', async () => {
+  const { db, dispatcher, dispatchId } = createHarness()
+  db.db.prepare("UPDATE dispatch_contexts SET status = 'completed' WHERE id = ?").run(dispatchId)
+  const mail = db.insertMessage({
+    from: 'sender',
+    to: WORKER_HANDLE,
+    subject: 'current direct mail after completion'
+  })
+  await expect(
+    dispatcher.dispatch(
+      request(
+        'orchestration.ackMessages',
+        { terminal: WORKER_HANDLE, ackIds: [mail.id] },
+        undefined,
+        'refused_completed_legacy_ack'
+      )
+    )
+  ).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'legacy_read_only', data: { effectsApplied: false } }
+  })
+  expect(db.getMessageById(mail.id)?.read).toBe(0)
+})
+
 describe('legacy compatibility after explicit takeover', () => {
   it('refuses selective IDs without returning or consuming a legacy page', async () => {
     const h = createHarness()

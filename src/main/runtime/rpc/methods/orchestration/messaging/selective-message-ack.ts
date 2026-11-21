@@ -7,6 +7,7 @@ import {
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
 import { ORCHESTRATION_LEGACY_RUN_ID } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
 import type { MessageRow } from '../../../../orchestration/db/orchestration-records'
+import { isDispatchMutationMessageType } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 
 export function isSelectedDispatchMessage(
   message: MessageRow,
@@ -91,7 +92,7 @@ export function acknowledgeSelectedMessages(args: {
           { effectsApplied: false }
         )
       }
-      if (message.type === 'worker_done' || message.type === 'heartbeat') {
+      if (isDispatchMutationMessageType(message.type)) {
         throw new OrchestrationError(
           'invalid_argument',
           'Selected mail is a lifecycle report. Use a normal check for that mail. No messages were acknowledged.',

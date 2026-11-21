@@ -5,7 +5,7 @@ import { createOrchestrationRpcHarness } from '../rpc-test-harness'
 const harness = createOrchestrationRpcHarness()
 afterEach(() => harness.cleanup())
 
-it.each(['caller pane', 'recorded pane', 'recorded handle'] as const)(
+it.each(['caller pane', 'recorded pane', 'recorded handle', 'session'] as const)(
   'refuses conflicting Dispatch owners on %s',
   async (conflict) => {
     const { db, runtime, ctx } = harness.setup()
@@ -25,7 +25,12 @@ it.each(['caller pane', 'recorded pane', 'recorded handle'] as const)(
         subject: `mail ${suffix}`
       })
     }
-    const other = seed('first', conflict === 'recorded handle' ? 'tab_first' : `tab_first:${leaf}`)
+    const other = seed(
+      'first',
+      conflict === 'recorded handle' || conflict === 'session'
+        ? 'tab_first:55555555-5555-4555-8555-555555555555'
+        : `tab_first:${leaf}`
+    )
     const newest = seed('second', 'tab_second:44444444-4444-4444-8444-444444444444')
     // Model conflicting restored records, which current Dispatch creation already prevents.
     db.db
@@ -35,6 +40,11 @@ it.each(['caller pane', 'recorded pane', 'recorded handle'] as const)(
       db.db
         .prepare('UPDATE dispatch_contexts SET assignee_handle = ? WHERE assignee_handle = ?')
         .run('term_second', 'term_first')
+    }
+    if (conflict === 'session') {
+      db.db
+        .prepare('UPDATE dispatch_contexts SET assignee_orca_session_id = ?')
+        .run('session_shared_owner')
     }
     await expect(
       harness.call('orchestration.ackMessages', { terminal, ackIds: [newest.id] }, ctx)

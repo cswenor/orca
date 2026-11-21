@@ -209,7 +209,7 @@ it('uses the same stable pane requirement as an ordinary consuming check', async
   expect(db.getMessageById(selected.id)?.read).toBe(0)
 })
 
-it.each(['worker_done', 'heartbeat'] as const)(
+it.each(['worker_done', 'heartbeat', 'escalation', 'decision_gate'] as const)(
   'refuses a mixed selection containing a %s lifecycle report without taking mail',
   async (type) => {
     const { db, ctx, activeRunId } = harness.setup()
