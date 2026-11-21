@@ -59,12 +59,10 @@ async function continueUnreadWorkerMail(
       dispatchId,
       first,
       later ? undefined : recoveryThrough
-    )
-    if (later) {
-      void continued.catch(report)
-      return
+    ).catch(report)
+    if (!later) {
+      await continued
     }
-    await continued
   } catch (error) {
     report(error)
   }

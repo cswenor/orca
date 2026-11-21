@@ -60,6 +60,16 @@ export class StructuredMailboxRedriveState {
     }
   }
 
+  beforeRetry(
+    db: OrchestrationDb,
+    mailbox: string,
+    outstanding: ReadonlySet<string>,
+    retries: readonly StructuredMailResend[],
+    index: number
+  ): void {
+    this.beforeWork(mailbox, () => oldestStructuredWork(db, mailbox, outstanding, retries, index))
+  }
+
   finish(mailbox: string): Set<string> | undefined {
     this.inFlight.delete(mailbox)
     const rerun = this.rerun.get(mailbox)

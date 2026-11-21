@@ -21,18 +21,13 @@ import { StructuredMailboxParking } from '../structured-mail/structured-mailbox-
 import { ownerAdjustedOwed, selectOwnedMail } from '../../structured-mail-owner-narrowing'
 import { StructuredMailSettledState } from '../structured-mail/structured-mail-settled-state'
 import * as mailCustody from '../structured-mail/structured-mail-custody'
-import {
-  oldestStructuredWork,
-  StructuredMailboxRedriveState
-} from './structured-mailbox-redrive-state'
+import { StructuredMailboxRedriveState } from './structured-mailbox-redrive-state'
 
 export type StructuredPointerTarget = {
   sessionId: string
   /** Direct peer mail has no Dispatch; that absence must not prevent worker nudges. */
   dispatchId: string | null
 }
-
-type AdmitStep = 'next' | 'park'
 
 export class OrchestrationStructuredMailboxPointerDelivery<
   TWaiter extends OrchestrationMessageWaiter
@@ -209,9 +204,7 @@ export class OrchestrationStructuredMailboxPointerDelivery<
         if (!message || again.row.session_id !== target.sessionId) {
           continue
         }
-        this.redrives.beforeWork(mailboxHandle, () =>
-          oldestStructuredWork(db, mailboxHandle, outstanding, retries, i)
-        )
+        this.redrives.beforeRetry(db, mailboxHandle, outstanding, retries, i)
         if (
           (await this.admit(db, mailboxHandle, target, message, senderSnapshot, again)) === 'park'
         ) {
@@ -268,7 +261,7 @@ export class OrchestrationStructuredMailboxPointerDelivery<
     message: MessageRow,
     senderSnapshot: SenderSnapshotResolver,
     again?: mailCustody.StructuredMailResend
-  ): Promise<AdmitStep> {
+  ): Promise<'next' | 'park'> {
     const sessionId = target.sessionId
     // Read before the fence, so a slow item read cannot leave the send a stale one; it never stops the send.
     const reportItem = this.deps.reportItem
