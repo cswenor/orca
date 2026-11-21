@@ -5,7 +5,7 @@ import { ensureMutationReceiptCapacity } from './mutation-receipt-capacity'
 import type { OrchestrationDb } from '../orchestration-db'
 import { MUTATION_RECEIPT_COLUMN_LIST } from '../row-column-lists'
 
-const LOCAL_TRANSPORT = 'local_authenticated_transport'
+export const LOCAL_MUTATION_TRANSPORT = 'local_authenticated_transport'
 
 export function readLocalMutationCallerFingerprint(this: OrchestrationDb): string | undefined {
   if (this.localMutationCallerFingerprint) {
@@ -13,7 +13,7 @@ export function readLocalMutationCallerFingerprint(this: OrchestrationDb): strin
   }
   const fingerprint = this.db
     .prepare('SELECT caller_fingerprint FROM mutation_caller_identities WHERE transport = ?')
-    .get(LOCAL_TRANSPORT)?.caller_fingerprint
+    .get(LOCAL_MUTATION_TRANSPORT)?.caller_fingerprint
   return typeof fingerprint === 'string' ? fingerprint : undefined
 }
 
@@ -27,7 +27,7 @@ function ensureStoredLocalCaller(db: OrchestrationDb): string {
       `INSERT OR IGNORE INTO mutation_caller_identities (transport, caller_fingerprint)
        VALUES (?, ?)`
     )
-    .run(LOCAL_TRANSPORT, randomBytes(32).toString('hex'))
+    .run(LOCAL_MUTATION_TRANSPORT, randomBytes(32).toString('hex'))
   const created = db.readLocalMutationCallerFingerprint()
   if (!created) {
     throw new Error('Failed to create the local orchestration mutation caller identity.')
@@ -42,13 +42,12 @@ export function getOrCreateLocalMutationCallerFingerprint(this: OrchestrationDb)
 export function beginMutationReceipt(
   this: OrchestrationDb,
   params: {
+    callerFingerprint: string
     requestId: string
     method: string
     payloadHash: string
-  } & (
-    | { callerFingerprint: string; receipt?: undefined }
-    | { callerFingerprint?: string; receipt: string }
-  )
+    receipt?: string
+  }
 ):
   | { disposition: 'started'; row: MutationReceiptRow }
   | { disposition: 'pending'; row: MutationReceiptRow }
@@ -63,7 +62,7 @@ export function beginMutationReceipt(
     this.db.exec('BEGIN IMMEDIATE')
   }
   try {
-    const caller = params.callerFingerprint ?? ensureStoredLocalCaller(this)
+    const caller = params.callerFingerprint
     const existing = this.getMutationReceipt(caller, params.requestId)
     if (existing) {
       if (

@@ -49,7 +49,7 @@ function holdMailRead(sessionId: string, hold: () => Promise<void>): void {
 describe('mail checks reconcile the currently owned source attempts', () => {
   it('rejects a mixed selection without withdrawing queued cards or marking any rows', async () => {
     await openChat(COORDINATOR)
-    const peer = await busyChat(PEER_CHAT)
+    await busyChat(PEER_CHAT)
     await coordinatorRunAndTask()
     const address = formatOrcaSessionAddress(testOrcaSessionId(PEER_CHAT))
     for (const subject of ['selected mail', 'unselected mail']) {
@@ -69,8 +69,7 @@ describe('mail checks reconcile the currently owned source attempts', () => {
       dispatcher.dispatch({
         ...request('orchestration.ackMessages', { ackIds }),
         orchestrationCompatibilityEvidence: {
-          agentSessionId: PEER_CHAT,
-          agentSessionMailboxLease: peer.mailboxLease
+          agentSessionId: PEER_CHAT
         }
       })
     const invalid = await ack([selected.id, 'msg_missing'])

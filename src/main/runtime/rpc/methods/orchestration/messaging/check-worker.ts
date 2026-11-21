@@ -14,7 +14,6 @@ import { asDispatchFence, callerHoldsDispatchPane, dispatchFenced } from './disp
 import { interruptedAcknowledgedCheck } from '../routing'
 import type { MessageWake } from '../../../../orchestration/mailbox/runtime-message-waiters'
 import { currentDispatchAssigneeRun } from './recipient-routing'
-import { assertSelectiveAckDispatchProcess } from '../../../orchestration/callers/selective-ack-caller'
 
 export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
   const {
@@ -60,11 +59,6 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
       }
       if (!callerHoldsDispatchPane(current, paneKey)) {
         throw dispatchFenced()
-      }
-      if (params.ackIds) {
-        const process = runtime.getTerminalProcessIncarnation(handle)
-        const assignee = args.reader?.revalidateAckLease?.() ? args.reader.orcaSessionId : null
-        assertSelectiveAckDispatchProcess(current, process, assignee)
       }
       return true
     }

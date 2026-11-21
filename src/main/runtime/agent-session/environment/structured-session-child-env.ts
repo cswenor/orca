@@ -10,7 +10,6 @@ import {
 } from '../../../../shared/app-lifecycle/app-environment'
 import {
   ORCA_AGENT_SESSION_ID_ENV,
-  ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV,
   ORCA_AGENT_SESSION_SPAWN_TOKEN_ENV
 } from '../../../../shared/agent-session/lifecycle/launch/agent-session-caller-env'
 import {
@@ -23,7 +22,6 @@ import { prependOrcaCliDirToChildPath } from '../../../cli/launchers/orca-cli-ch
 import { AGENT_HOOK_RUNTIME_ENV_KEYS } from '../../../ipc/pty/host-env/spawn-env-keys'
 import { REMOTE_RUNTIME_SELECTOR_ENV_KEYS } from '../../../ipc/pty/host-env/inherited-orca-identity-env'
 import { resolveStructuredWorkerIdentityForSession } from '../../orchestration/terminal-authority/structured-sessions/structured-worker-authority'
-import { structuredMailboxLeaseProof } from '../ownership/structured-mailbox-lease-proof'
 
 /** Remove inherited pane identity so hooks and the CLI cannot attribute the chat to the host's launching pane; the seal keeps a worker's own handle. */
 export const STRUCTURED_CHILD_ENV_TO_DELETE: readonly string[] = [
@@ -33,7 +31,6 @@ export const STRUCTURED_CHILD_ENV_TO_DELETE: readonly string[] = [
   'ORCA_WORKSPACE_ID',
   'ORCA_TERMINAL_HANDLE',
   'ORCA_AGENT_LAUNCH_TOKEN',
-  ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV,
   ORCA_SCRUB_SAFE_PANE_ENV,
   ORCA_SCRUB_SAFE_LAUNCH_ENV,
   ...AGENT_HOOK_RUNTIME_ENV_KEYS
@@ -59,7 +56,7 @@ export function sealStructuredSessionChild(input: {
   const paired = input.cliRuntimeCommand
     ? withCliRuntimeOnPath(input.cliRuntimeCommand, input.env, { platform: process.platform })
     : input.env
-  const identity = childIdentity(input.sessionId, input.spawnToken, paired)
+  const identity = childIdentity(input.sessionId, paired)
   const named = new Set([...Object.keys(identity.commandEnv), ORCA_AGENT_SESSION_SPAWN_TOKEN_ENV])
   return {
     env: { ...identity.env, [ORCA_AGENT_SESSION_SPAWN_TOKEN_ENV]: input.spawnToken },
@@ -70,14 +67,12 @@ export function sealStructuredSessionChild(input: {
 
 function childIdentity(
   sessionId: string,
-  spawnToken: string,
   childEnv: Record<string, string>
 ): { env: Record<string, string>; commandEnv: Record<string, string> } {
   const identity = resolveStructuredWorkerIdentityForSession(sessionId, null)
   const named: Record<string, string> = {
     ...(identity ? { ORCA_TERMINAL_HANDLE: identity.handle } : {}),
     [ORCA_AGENT_SESSION_ID_ENV]: sessionId,
-    [ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV]: structuredMailboxLeaseProof(spawnToken).toString('hex'),
     [ORCA_STRUCTURED_SESSION_ENV]: '1'
   }
   const env = { ...childEnv, ...named }
@@ -114,11 +109,7 @@ function applyThisAppCli(env: Record<string, string>): Record<string, string> {
   return set
 }
 
-const CALLER_IDENTITY_ENV = [
-  ORCA_AGENT_SESSION_ID_ENV,
-  ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV,
-  'ORCA_TERMINAL_HANDLE'
-]
+const CALLER_IDENTITY_ENV = [ORCA_AGENT_SESSION_ID_ENV, 'ORCA_TERMINAL_HANDLE']
 
 /** A sealed child's environment without its caller identity; the structured marker stays, so
  *  Orca's CLI refuses to guess a caller rather than name another chat. */

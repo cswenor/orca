@@ -1,7 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { OrchestrationRequestEvidence } from '../../../../../cli/orchestration/identity/orchestration-compatibility-envelope'
-import { sealStructuredSessionChild } from '../../../agent-session/environment/structured-session-child-env'
-import type { AgentSessionRecord } from '../../../../../shared/agent-session/lifecycle/agent-session-record'
 import { testOrcaSessionId } from '../../../../../shared/agent-session/identity/orca-session-address-test-fixture'
 import {
   mintStructuredWorkerHandle,
@@ -29,23 +26,12 @@ vi.mock(
   })
 )
 
-function leaseEnvironment(sessionId: string, record: AgentSessionRecord) {
-  return new OrchestrationRequestEvidence(
-    sealStructuredSessionChild({
-      sessionId,
-      spawnToken: record.lease.ownerProcess!.spawnToken,
-      env: {},
-      inheritedEnvToDelete: []
-    }).commandEnv
+function acknowledgment(sessionId: string, id: string, requestId: string) {
+  return orchestrationRequest(
+    'orchestration.ackMessages',
+    { ackIds: [id] },
+    { sessionId, requestId }
   )
-}
-
-function acknowledgment(evidence: OrchestrationRequestEvidence, id: string, requestId: string) {
-  const method = 'orchestration.ackMessages'
-  return {
-    ...orchestrationRequest(method, { ackIds: [id] }, { requestId }),
-    ...evidence.envelopeFor(method, { remote: false, mutation: true, requestId })
-  }
 }
 
 describe('a structured worker that names itself by session id', () => {
@@ -162,53 +148,12 @@ describe('a structured worker that names itself by session id', () => {
     }
     const current = sessionRecord(successor)
     h.records.set(successor, current)
-    const evidence = leaseEnvironment(successor, current)
-    const acknowledge = () => h.dispatch(acknowledgment(evidence, message.id, 'clear-worker-ack'))
+    const acknowledge = () => h.dispatch(acknowledgment(successor, message.id, 'clear-worker-ack'))
     expect(resultOf(await acknowledge())).toMatchObject({ markedIds: [message.id] })
     expect(resultOf(await acknowledge())).toMatchObject({ mutation: { replayed: true } })
     current.lease = { ...current.lease, runtimeFence: current.lease.runtimeFence + 1 }
-    // Matching physical proof but a different runtime fence cannot replay an older receipt.
+    // The current session can act, but a different live lease cannot replay an older receipt.
     expect(await acknowledge()).toMatchObject({ ok: false, error: { code: 'request_mismatch' } })
-  })
-
-  it('refuses an old child lease on first admission without recording its request', async () => {
-    const record = h.records.get(SESSION_X)!
-    const oldEvidence = leaseEnvironment(SESSION_X, record)
-    const otherMail = h.db.insertMessage({
-      from: 'term_sender',
-      to: ADDRESS_Y,
-      subject: 'untouched'
-    })
-    const ownMail = h.db.insertMessage({
-      from: 'term_sender',
-      to: `orca_session_id:${SESSION_X}`,
-      subject: 'current lease mailbox'
-    })
-    record.lease = {
-      ...record.lease,
-      runtimeFence: record.lease.runtimeFence + 1,
-      ownerProcess: { ...record.lease.ownerProcess!, spawnToken: 'replacement-spawn' }
-    }
-    const requestId = 'first-request-after-replacement'
-    for (const request of [
-      acknowledgment(oldEvidence, ownMail.id, requestId),
-      orchestrationRequest(
-        'orchestration.ackMessages',
-        { ackIds: [ownMail.id] },
-        { sessionId: SESSION_X, requestId }
-      )
-    ]) {
-      expect(await h.dispatch(request)).toMatchObject({
-        ok: false,
-        error: { code: 'consumer_fenced', data: { effectsApplied: false } }
-      })
-      expect(h.db.getMessageById(ownMail.id)?.read).toBe(0)
-    }
-    const currentEvidence = leaseEnvironment(SESSION_X, record)
-    expect(
-      resultOf(await h.dispatch(acknowledgment(currentEvidence, ownMail.id, requestId)))
-    ).toMatchObject({ markedIds: [ownMail.id], mutation: { replayed: false } })
-    expect(h.db.getMessageById(otherMail.id)?.read).toBe(0)
   })
 
   it('preserves selected wake-up mail until a released session is running again', async () => {
@@ -230,15 +175,17 @@ describe('a structured worker that names itself by session id', () => {
       type: 'question'
     })
     const record = h.records.get(workerSession)!
-    const evidence = leaseEnvironment(workerSession, record)
     record.lease = { ...record.lease, claimStatus: 'released' }
     const acknowledge = () =>
-      h.dispatch(acknowledgment(evidence, message.id, 'selective_wake_up_ack'))
+      h.dispatch(acknowledgment(workerSession, message.id, 'selective_wake_up_ack'))
 
-    expect(await acknowledge()).toMatchObject({
-      ok: false,
-      error: { code: 'session_caller_not_live', data: { effectsApplied: false } }
-    })
+    const check = orchestrationRequest('orchestration.check', {}, { sessionId: workerSession })
+    for (const result of [await h.dispatch(check), await acknowledge()]) {
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'session_caller_not_live', data: { effectsApplied: false } }
+      })
+    }
     expect(h.db.getMessageById(message.id)?.read).toBe(0)
 
     record.lease = { ...record.lease, claimStatus: 'live' }

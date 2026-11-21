@@ -43,11 +43,7 @@ export async function commitPtyIpcSpawn(ctx: PtyIpcSpawnState): Promise<PtySpawn
           incarnationId: ctx.result.incarnationId
         }),
         launchedAgent: freshSpawn ? resolveLaunchedAgent(args.command, args.launchAgent) : null,
-        freshSpawn: freshSpawn
-          ? ctx.spawnOptions.env?.ORCA_AGENT_LAUNCH_TOKEN
-            ? 'tokenized'
-            : 'tokenless'
-          : undefined
+        freshSpawn
       },
       preAllocatedHandle: ctx.preAllocatedHandle,
       spawnTiming: ctx.spawnTiming,

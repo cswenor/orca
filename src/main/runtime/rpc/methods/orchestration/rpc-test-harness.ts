@@ -46,23 +46,6 @@ export function createOrchestrationRpcHarness() {
     vi.spyOn(runtime, 'getTerminalProcessIncarnation').mockImplementation((handle) =>
       handle.startsWith('term_') ? `runtime_test:${handle}:1` : null
     )
-    vi.spyOn(runtime, 'getSelectiveAckPtyLaunchToken').mockReturnValue(null)
-    vi.spyOn(runtime, 'getOrchestrationDispatchAuthority').mockImplementation((handle) => {
-      const paneKey = runtime.getLiveTerminalPaneKey(handle)
-      if (!paneKey) {
-        return null
-      }
-      return {
-        runtimeId: runtime.getRuntimeId(),
-        terminalHandle: handle,
-        ptyId: handle,
-        worktreeId: 'test-worktree',
-        processIncarnation: runtime.getTerminalProcessIncarnation(handle),
-        paneKey,
-        launchTokenHash: null,
-        hostScope: { kind: 'local', hostId: 'local' }
-      }
-    })
     if (withBoundRun) {
       activeRunId = db.createRun({
         objective: 'Test Run',

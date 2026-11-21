@@ -30,7 +30,6 @@ import {
 import { lookupOrcaAgentSession } from '../../../orchestration/mailbox/routing/structured-session-mail-address'
 import { conversationRecordReader } from '../../../orchestration/addressing/session-lineage/structured-session-lineage'
 import type { AgentSessionRecordStore } from '../../../agent-session/records/agent-session-record-store'
-import { matchesStructuredMailboxLease } from '../../../agent-session/ownership/structured-mailbox-lease-proof'
 import { getStructuredAgentSessionHost } from '../../../../native-chat/agent-session-wire/host/structured-agent-session-registry'
 import { structuredWorkerHostScope } from '../../../orchestration/terminal-authority/structured-sessions/structured-worker-identity'
 import { BOT_ITEM_WRITE_METHOD_NAMES } from '../../../../../shared/bots/bot-items'
@@ -131,23 +130,19 @@ export async function resolveOrchestrationSessionCaller(
   const store = selectiveAck ? getStructuredAgentSessionHost()?.deps.store : undefined
   const { runtimeFence, ownerProcess } = record.lease
   const spawnToken = ownerProcess?.spawnToken
-  const originatingOwner =
-    selectiveAck && matchesStructuredMailboxLease(evidence.agentSessionMailboxLease, spawnToken)
   const revalidateAckLease = () => {
     const current =
       store && store === getStructuredAgentSessionHost()?.deps.store
         ? store.requireWritableRecord(record.sessionId)
         : undefined
-    // A claimed session ID by itself must never borrow the current owner's lease.
     if (
       !current ||
       current.lease.runtimeFence !== runtimeFence ||
-      !originatingOwner ||
       current.lease.ownerProcess?.spawnToken !== spawnToken
     ) {
       throw new OrchestrationError(
         'consumer_fenced',
-        'Selective acknowledgment requires the originating live mailbox lease.',
+        'The selected mailbox session changed while checking mail.',
         NO_EFFECTS
       )
     }

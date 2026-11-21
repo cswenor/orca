@@ -98,8 +98,8 @@ export type PtySpawnCommitInput = {
     rendererLaunchAuthority: ReturnType<typeof admitRendererAgentLaunchAuthority>
     /** The agent a fresh spawn's launch command starts; null for reattaches, adoptions and shells. */
     launchedAgent: TuiAgent | null
-    /** A fresh renderer spawn's process environment, not an authority grant. */
-    freshSpawn?: 'tokenized' | 'tokenless'
+    /** Neither a reattach nor an adoption of a live pane's process. */
+    freshSpawn: boolean
   }
   preAllocatedHandle: string | null | undefined
   spawnTiming?: PtySpawnTiming
@@ -170,7 +170,7 @@ export async function commitPtySpawn(input: PtySpawnCommitInput): Promise<PtySpa
               : {}),
             ...(registration.launchedAgent ? { launchedAgent: registration.launchedAgent } : {}),
             ...(providerReattachLaunchIdentity ? { providerReattachLaunchIdentity } : {}),
-            ...(registration.freshSpawn ? { freshSpawn: registration.freshSpawn } : {}),
+            ...(registration.freshSpawn ? { freshSpawn: true as const } : {}),
             ...reattachLaunchBinding(result)
           }
         : undefined,

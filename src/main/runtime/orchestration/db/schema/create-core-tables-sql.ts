@@ -1,4 +1,5 @@
 import { ORCHESTRATION_LEGACY_RUN_ID as LEGACY_RUN_ID } from '../../../../../shared/orchestration/orchestration-rpc-contract'
+import { LOCAL_MUTATION_TRANSPORT } from '../mutation-receipts/mutation-receipt-store'
 
 export function createCoreTablesSql(): string {
   return `
@@ -119,6 +120,13 @@ CREATE TABLE IF NOT EXISTS mutation_receipts (
 CREATE TABLE IF NOT EXISTS mutation_caller_identities (
   transport           TEXT PRIMARY KEY,
   caller_fingerprint  TEXT NOT NULL UNIQUE
+);
+
+-- A new mark-only operation must not have to allocate a caller identity.
+INSERT INTO mutation_caller_identities (transport, caller_fingerprint)
+SELECT '${LOCAL_MUTATION_TRANSPORT}', lower(hex(randomblob(32)))
+WHERE NOT EXISTS (
+  SELECT 1 FROM mutation_caller_identities WHERE transport = '${LOCAL_MUTATION_TRANSPORT}'
 );
 
 -- Attempt evidence stays additive so old Task/Dispatch/worker CHECK enums remain wire-compatible.

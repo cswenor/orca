@@ -6,17 +6,7 @@ import {
 import '../../construction/test-context/runtime-test-module-registration.spec'
 import { OrcaRuntimeService } from '../../orca-runtime'
 import '../../orca-runtime-test-mocks/setup.spec'
-import { makePaneKey, parsePaneKey } from '../../../../shared/workspace-layout/stable-pane-id'
-import { assertSelectiveAckCaller } from '../../rpc/orchestration/callers/selective-ack-caller'
-import { commitPtyIpcSpawn } from '../../../ipc/pty/ipc/spawn-commit'
-import { createPtyIpcSpawnState } from '../../../ipc/pty/ipc/spawn-state'
-import {
-  noCodexResumeLaunch,
-  reconcileSharedRuntimeResumeHome,
-  resolveCodexResumeLaunch,
-  stripSequencedStartupResumeArgv
-} from '../../../ipc/pty/host-env/codex-resume'
-import { unregisterPty } from '../../../memory/pty-registry'
+import { makePaneKey } from '../../../../shared/workspace-layout/stable-pane-id'
 import {
   HEADLESS_LEAF_ID,
   RESTORED_AUTHORITY_TOKEN,
@@ -32,10 +22,8 @@ import { spawnedPtyEnv } from '../../terminal/launch/spawned-pty-env-fixtures'
 import '../../../../shared/agent-launch/startup/jcode-runtime-dir'
 
 describe('OrcaRuntimeService', () => {
-  it.each([false, true])('retires launch authority (late process ID: %s)', async (late) => {
-    const spawn = vi
-      .fn()
-      .mockResolvedValue({ id: 'pty-authority', incarnationId: late ? undefined : 'process-1' })
+  it('retires inherited launch authority when the agent command exits', async () => {
+    const spawn = vi.fn().mockResolvedValue({ id: 'pty-authority', incarnationId: 'process-1' })
     const retireAuthority = vi.fn()
     const runtime = new OrcaRuntimeService(store, undefined, {
       attestAgentHookCompatibilityAuthority: (candidate) => ({
@@ -68,7 +56,7 @@ describe('OrcaRuntimeService', () => {
 
     const terminal = await runtime.createTerminal(`path:${TEST_WORKTREE_PATH}`, {
       command: 'codex',
-      launchAgent: late ? undefined : 'codex',
+      launchAgent: 'codex',
       launchConfig: { agentCommand: 'codex', agentArgs: '', agentEnv: {} }
     })
     const spawnEnv = spawnedPtyEnv(spawn.mock.calls[0]?.[0])
@@ -78,19 +66,6 @@ describe('OrcaRuntimeService', () => {
       launchToken: spawnEnv.ORCA_AGENT_LAUNCH_TOKEN
     }
 
-    if (late) {
-      const pane = parsePaneKey(evidence.paneKey!)!
-      runtime.registerPty('pty-authority', TEST_WORKTREE_ID, null, {
-        ...pane,
-        incarnationId: 'process-1'
-      })
-      expect(() =>
-        assertSelectiveAckCaller(undefined, runtime, terminal.handle, 'pty-authority:process-1', {
-          paired: false,
-          evidence: undefined
-        })
-      ).toThrow('cannot verify this pane')
-    }
     expect(runtime.verifyOrchestrationCompatibilityCaller(evidence)).not.toBeNull()
     expect((await runtime.listTerminals()).terminals).toEqual([
       expect.objectContaining({ handle: terminal.handle, agentIdentity: 'codex' })
@@ -100,103 +75,12 @@ describe('OrcaRuntimeService', () => {
 
     expect(retireAuthority).toHaveBeenCalledWith(spawnEnv.ORCA_PANE_KEY, { confirmedExit: true })
     expect(runtime.verifyOrchestrationCompatibilityCaller(evidence)).toBeNull()
-    expect(() =>
-      assertSelectiveAckCaller(undefined, runtime, terminal.handle, 'pty-authority:process-1', {
-        paired: false,
-        evidence: undefined
-      })
-    ).toThrow('cannot verify this pane')
     expect((await runtime.listTerminals()).terminals).toEqual([
       expect.not.objectContaining({ agentIdentity: expect.anything() })
     ])
   })
 
-  it.each([false, true])('checks late renderer registration (token: %s)', async (tokenized) => {
-    const ptyId = 'renderer-selective-pty'
-    const paneKey = makePaneKey('host-tab', HEADLESS_LEAF_ID)
-    const { runtimeStore } = makeRuntimeStoreWithWorkspaceSession(
-      makeWorkspaceSessionWithHeadlessTerminal({})
-    )
-    const runtime = new OrcaRuntimeService(runtimeStore as never)
-    runtime.attachWindow(TEST_WINDOW_ID)
-    await runtime.syncWindowGraph(TEST_WINDOW_ID, {
-      tabs: [
-        {
-          tabId: 'host-tab',
-          worktreeId: TEST_WORKTREE_ID,
-          title: 'Renderer pane',
-          activeLeafId: HEADLESS_LEAF_ID,
-          layout: null
-        }
-      ],
-      leaves: [
-        {
-          tabId: 'host-tab',
-          worktreeId: TEST_WORKTREE_ID,
-          leafId: HEADLESS_LEAF_ID,
-          paneRuntimeId: 1,
-          ptyId
-        }
-      ]
-    })
-    const pane = { tabId: 'host-tab', leafId: HEADLESS_LEAF_ID }
-    registerLivePty(runtime, ptyId, TEST_WORKTREE_ID, null, pane)
-    const launchToken = 'renderer-launch-token'
-    const spawn = createPtyIpcSpawnState(
-      {
-        runtime,
-        prepareCodexResumeHome: () => null,
-        noCodexResumeLaunch,
-        resolveCodexResumeLaunch,
-        reconcileSharedRuntimeResumeHome,
-        stripSequencedStartupResumeArgv,
-        getLocalPtyStartupPromise: () => undefined,
-        adoptStablePane: async () => null,
-        assertWorkspaceAcceptsNewPty: vi.fn(),
-        resolvePtySpawnStartupCwd: (_worktree, cwd) => cwd,
-        transitionSpawnHiddenRendererPtyDeliveryState: vi.fn(),
-        trustedTerminalHandleEnv: new Set(),
-        sendPtySpawnedToRenderer: vi.fn(),
-        syncPtyBackgroundedDelivery: vi.fn(),
-        stopReplacedPty: vi.fn()
-      },
-      {
-        cols: 80,
-        rows: 24,
-        worktreeId: TEST_WORKTREE_ID,
-        ...pane,
-        launchAgent: 'codex',
-        launchToken
-      }
-    )
-    spawn.result = { id: ptyId }
-    spawn.metadataLeafId = HEADLESS_LEAF_ID
-    spawn.effectiveLaunchConfig = { agentCommand: 'codex', agentArgs: '', agentEnv: {} }
-    if (tokenized) {
-      spawn.spawnEnv = spawn.spawnOptions.env = { ORCA_AGENT_LAUNCH_TOKEN: launchToken }
-    }
-    try {
-      await commitPtyIpcSpawn(spawn)
-      const incarnationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
-      runtime.registerPty(ptyId, TEST_WORKTREE_ID, null, { ...pane, incarnationId })
-      const handle = runtime.getAgentStatusTerminalHandleForPaneKey(paneKey)!
-      const ack = () =>
-        assertSelectiveAckCaller(undefined, runtime, handle, `${ptyId}:${incarnationId}`, {
-          paired: false,
-          evidence: undefined
-        })
-      runtime.onPtyData(ptyId, '\x1b]133;D;0\x07', 100)
-      if (tokenized) {
-        expect(ack).toThrow('cannot verify this pane')
-      } else {
-        expect(ack()).toHaveProperty('pty.id', ptyId)
-      }
-    } finally {
-      unregisterPty(ptyId)
-    }
-  })
-
-  it.each([null, 'retained-launch'])('restores a coordinator with note %s', async (token) => {
+  it('restores a retained coordinator handle after a late controller inventory', async () => {
     const paneKey = makePaneKey('host-tab', HEADLESS_LEAF_ID)
     const incarnationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
     const session = makeWorkspaceSessionWithHeadlessTerminal({
@@ -261,21 +145,6 @@ describe('OrcaRuntimeService', () => {
       leafId: HEADLESS_LEAF_ID,
       incarnationId
     })
-    vi.spyOn(runtime, 'readLaunchedAgentForeground').mockResolvedValue('agent')
-    runtime.registerPty('persisted-pty', TEST_WORKTREE_ID, null, {
-      tabId: 'host-tab',
-      leafId: HEADLESS_LEAF_ID,
-      incarnationId,
-      providerReattachLaunchIdentity: { incarnationId, launchAgent: 'codex' },
-      reattach: {
-        launchNote: token
-          ? {
-              launchToken: token,
-              launchConfig: { agentCommand: 'codex', agentArgs: '', agentEnv: {} }
-            }
-          : null
-      }
-    })
     const syntheticHandle = runtime.getAgentStatusTerminalHandleForPaneKey(paneKey)
     expect(syntheticHandle).toMatch(/^term_/)
     expect(syntheticHandle).not.toBe(controllerHandle)
@@ -294,21 +163,5 @@ describe('OrcaRuntimeService', () => {
       paneKey,
       processIncarnation: `persisted-pty:${incarnationId}`
     })
-
-    const process = `persisted-pty:${incarnationId}`
-    const ack = (launchToken?: string) =>
-      assertSelectiveAckCaller(undefined, runtime, controllerHandle, process, {
-        paired: false,
-        evidence: { terminalHandle: controllerHandle, paneKey, launchToken }
-      })
-    if (token) {
-      await vi.waitFor(() => expect(ack(token)).toHaveProperty('pty.id', 'persisted-pty'))
-      expect(() => ack(RESTORED_AUTHORITY_TOKEN)).toThrow('current agent pane launch token')
-    } else {
-      expect(() => ack()).toThrow('cannot verify this pane')
-      expect(ack(RESTORED_AUTHORITY_TOKEN)).toMatchObject({
-        pty: { id: 'persisted-pty', launchTokenHash: RESTORED_AUTHORITY_TOKEN_HASH }
-      })
-    }
   })
 })

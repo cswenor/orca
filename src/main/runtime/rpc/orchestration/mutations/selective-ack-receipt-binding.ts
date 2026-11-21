@@ -1,17 +1,14 @@
-import { ORCHESTRATION_UNBOUND_RUN_ID } from '../../../../../shared/orchestration/orchestration-rpc-contract'
-import type { OrchestrationEntryCaller } from '../../../orchestration/addressing/orchestration-caller-identity'
+import {
+  sessionCallerOf,
+  type OrchestrationEntryCaller
+} from '../../../orchestration/addressing/orchestration-caller-identity'
 import { getMessagesByIds } from '../../../orchestration/db/messages/messages-by-id'
 import type { OrcaRuntimeService } from '../../../orca-runtime'
 import { OrchestrationError } from '../../../orchestration/orchestration-error'
 import type { RpcRequest } from '../../core'
-import {
-  assertSelectiveAckCaller,
-  assertSelectiveAckDispatchProcess
-} from '../callers/selective-ack-caller'
-import {
-  orchestrationCallerIdentity,
-  resolveRunScope
-} from '../../methods/orchestration/runs/run-scope'
+import { callerHoldsResidualDispatch } from '../../methods/orchestration/messaging/check-run-pending-mail'
+import { resolveMailboxCheckScope } from '../../methods/orchestration/messaging/check-methods'
+import { resolveRunScope } from '../../methods/orchestration/runs/run-scope'
 import type { DurableMutationInvocation } from './orchestration-mutation-executor'
 import {
   attachMutationReceipt,
@@ -25,8 +22,7 @@ export async function runSelectiveAckMutation(
   params: unknown,
   invoke: (mutation: DurableMutationInvocation) => unknown,
   callerFingerprint: string | undefined,
-  caller: OrchestrationEntryCaller | undefined,
-  paired: boolean
+  caller: OrchestrationEntryCaller | undefined
 ): Promise<unknown> {
   const requestId = request.orchestrationRequestId
   if (!requestId) {
@@ -37,7 +33,7 @@ export async function runSelectiveAckMutation(
     )
   }
   const readBinding = () =>
-    hashCanonical(selectiveAckReceiptBinding(runtime, request, params, caller, paired))
+    hashCanonical(selectiveAckReceiptBinding(runtime, request, params, caller))
   const binding = readBinding()
   const { method } = request
   const payloadHash = hashCanonical({
@@ -47,7 +43,10 @@ export async function runSelectiveAckMutation(
   })
   const db = runtime.getOrchestrationDb()
   const fingerprint = callerFingerprint ?? db.readLocalMutationCallerFingerprint()
-  const existing = fingerprint ? db.getMutationReceipt(fingerprint, requestId) : undefined
+  if (fingerprint === undefined) {
+    throw new Error('Local mutation caller identity was not initialized.')
+  }
+  const existing = db.getMutationReceipt(fingerprint, requestId)
   if (existing) {
     if (existing.method !== method || existing.payload_hash !== payloadHash) {
       throw new OrchestrationError(
@@ -87,8 +86,7 @@ function selectiveAckReceiptBinding(
   runtime: OrcaRuntimeService,
   request: RpcRequest,
   params: unknown,
-  caller: OrchestrationEntryCaller | undefined,
-  paired: boolean
+  caller: OrchestrationEntryCaller | undefined
 ) {
   if (
     !params ||
@@ -109,89 +107,60 @@ function selectiveAckReceiptBinding(
       ? params.terminalPaneKey
       : undefined
   const run = 'run' in params && typeof params.run === 'string' ? params.run : undefined
-  const livePane = runtime.getTerminalPaneKey(handle)
-  const process = runtime.getTerminalProcessIncarnation(handle)
-  const callerBinding = assertSelectiveAckCaller(caller, runtime, handle, process, {
-    evidence: request.orchestrationCompatibilityEvidence,
-    paired
-  })
-  if (run === ORCHESTRATION_UNBOUND_RUN_ID) {
-    return { process, callerBinding, livePane, direct: handle }
-  }
   const db = runtime.getOrchestrationDb()
-  const identity = orchestrationCallerIdentity(runtime, {
-    handle,
-    paneKey: livePane ?? terminalPaneKey,
-    session: caller
+  const scope = resolveMailboxCheckScope(
+    runtime,
+    db,
+    { terminal: handle, terminalPaneKey, run },
+    caller
+  )
+  const { livePane, paneKey } = scope
+  // This is the authorized consumer snapshot, not a second origin check.
+  const process = runtime.getTerminalProcessIncarnation(handle)
+  const lease = sessionCallerOf(caller)?.revalidateAckLease?.()
+  const target = { process, lease, livePane, paneKey }
+  if (scope.kind === 'direct') {
+    return { ...target, direct: handle }
+  }
+  if (scope.kind === 'dispatch') {
+    const { activeDispatch: dispatch, remoteAttachment: attachment } = scope
+    return {
+      ...target,
+      dispatch: dispatch
+        ? [dispatch.id, dispatch.run_id, dispatch.consumer_generation]
+        : attachment
+          ? [attachment.dispatch_id, attachment.home_run_id, attachment.consumer_generation]
+          : undefined
+    }
+  }
+  const currentRun = resolveRunScope(runtime, {
+    runId: run,
+    callerTerminalHandle: handle,
+    callerPaneKey: paneKey,
+    callerSession: caller,
+    requireCurrentConsumer: true,
+    callerEvidence: request.orchestrationCompatibilityEvidence
   })
-  const paneKey = identity.paneKey ?? undefined
-  const boundRun = run ?? db.getCurrentRunForCoordinator(identity)?.id
-  const currentRun = boundRun
-    ? resolveRunScope(runtime, {
-        runId: boundRun,
-        callerTerminalHandle: handle,
-        callerPaneKey: paneKey,
-        callerSession: caller,
-        requireCurrentConsumer: true,
-        callerEvidence: request.orchestrationCompatibilityEvidence
-      })
-    : undefined
-  const dispatch = run ? undefined : db.getActiveDispatchForIdentity(handle, paneKey)
-  if (currentRun) {
-    let residual: [string, number] | undefined
-    if (dispatch) {
-      const mailbox = `dispatch:${dispatch.id}`
-      for (const row of getMessagesByIds(db, ackIds).values()) {
-        if (row.to_handle === mailbox) {
-          assertSelectiveAckDispatchProcess(
-            dispatch,
-            process,
-            callerBinding.lease ? caller?.orcaSessionId : null
-          )
-          residual = [dispatch.id, dispatch.consumer_generation]
-          break
-        }
+  const dispatch = !run ? db.getActiveDispatchForIdentity(handle, paneKey) : undefined
+  let residual: [string, number] | undefined
+  if (
+    dispatch &&
+    callerHoldsResidualDispatch(
+      runtime,
+      db,
+      dispatch,
+      currentRun.id,
+      paneKey,
+      scope.caller.orcaSessionId
+    )
+  ) {
+    const mailbox = `dispatch:${dispatch.id}`
+    for (const row of getMessagesByIds(db, ackIds).values()) {
+      if (row.to_handle === mailbox) {
+        residual = [dispatch.id, dispatch.consumer_generation]
+        break
       }
     }
-    return {
-      process,
-      callerBinding,
-      livePane,
-      run: [currentRun.id, currentRun.consumer_generation],
-      dispatch: residual
-    }
   }
-  const attachment =
-    !dispatch && paneKey ? db.findActiveRemoteAttachmentForPane(paneKey) : undefined
-  if (dispatch) {
-    assertSelectiveAckDispatchProcess(
-      dispatch,
-      process,
-      callerBinding.lease ? caller?.orcaSessionId : null
-    )
-  }
-  if (
-    attachment &&
-    paneKey &&
-    !db.isRemoteAttachmentProcessCurrent({
-      dispatchId: attachment.dispatch_id,
-      paneKey,
-      processIncarnation: process
-    })
-  ) {
-    throw new OrchestrationError('consumer_fenced', 'The remote Dispatch caller was replaced.', {
-      effectsApplied: false
-    })
-  }
-  return {
-    process,
-    callerBinding,
-    livePane,
-    dispatch: dispatch
-      ? [dispatch.id, dispatch.run_id, dispatch.consumer_generation]
-      : attachment
-        ? [attachment.dispatch_id, attachment.home_run_id, attachment.consumer_generation]
-        : undefined,
-    direct: dispatch || attachment ? undefined : handle
-  }
+  return { ...target, run: [currentRun.id, currentRun.consumer_generation], dispatch: residual }
 }

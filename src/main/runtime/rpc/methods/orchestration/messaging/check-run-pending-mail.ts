@@ -1,4 +1,8 @@
-import type { MessageType, RunRow } from '../../../../orchestration/db/orchestration-records'
+import type {
+  DispatchContextRow,
+  MessageType,
+  RunRow
+} from '../../../../orchestration/db/orchestration-records'
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import type { OrcaRuntimeService } from '../../../../orca-runtime'
 import { interruptedAcknowledgedCheck } from '../routing'
@@ -13,7 +17,23 @@ import type {
   OrchestrationSessionCaller
 } from '../../../../orchestration/addressing/orchestration-caller-identity'
 import type { MailboxCheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
-import { assertSelectiveAckDispatchProcess } from '../../../orchestration/callers/selective-ack-caller'
+
+export function callerHoldsResidualDispatch(
+  runtime: OrcaRuntimeService,
+  db: OrchestrationDb,
+  residual: DispatchContextRow,
+  runId: string,
+  paneKey: string | undefined,
+  assigneeSessionId: string | null
+): boolean {
+  return (
+    residual.run_id !== runId &&
+    (residual.assignee_orca_session_id === null ||
+      residual.assignee_orca_session_id === assigneeSessionId) &&
+    callerHoldsDispatchPane(residual, paneKey) &&
+    currentDispatchAssigneeRun(runtime, db, residual)?.id === runId
+  )
+}
 
 export async function checkRunPendingMail(args: {
   params: MailboxCheckParams
@@ -62,11 +82,7 @@ export async function checkRunPendingMail(args: {
       return false
     }
     return (
-      residual.run_id !== run.id &&
-      (residual.assignee_orca_session_id === null ||
-        residual.assignee_orca_session_id === caller.orcaSessionId) &&
-      callerHoldsDispatchPane(residual, paneKey) &&
-      currentDispatchAssigneeRun(runtime, db, residual)?.id === run.id &&
+      callerHoldsResidualDispatch(runtime, db, residual, run.id, paneKey, caller.orcaSessionId) &&
       Boolean(params.ackIds || residualAck || !db.hasOutstandingMailboxDelivery(address))
     )
   }
@@ -89,16 +105,17 @@ export async function checkRunPendingMail(args: {
                   if (
                     current?.id !== residual.id ||
                     current.consumer_generation !== residual.consumer_generation ||
-                    !callerHoldsDispatchPane(current, paneKey) ||
-                    currentDispatchAssigneeRun(runtime, db, current)?.id !== run.id
+                    !callerHoldsResidualDispatch(
+                      runtime,
+                      db,
+                      current,
+                      run.id,
+                      paneKey,
+                      caller.orcaSessionId
+                    )
                   ) {
                     throw dispatchFenced()
                   }
-                  assertSelectiveAckDispatchProcess(
-                    current,
-                    runtime.getTerminalProcessIncarnation(handle),
-                    args.reader?.revalidateAckLease?.() ? args.reader.orcaSessionId : null
-                  )
                 }
               }
             : undefined

@@ -296,8 +296,7 @@ export class RpcDispatcher {
       effectiveParams,
       invoke,
       callerFingerprint,
-      context.orchestrationCaller,
-      context.caller?.kind === 'paired-device'
+      context.orchestrationCaller
     )
     if (selectiveAck) {
       return result

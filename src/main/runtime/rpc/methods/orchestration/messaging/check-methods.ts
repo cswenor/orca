@@ -6,6 +6,8 @@ import {
   type MailboxCheckParams
 } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 import type { RpcContext } from '../../../core'
+import type { OrcaRuntimeService } from '../../../../orca-runtime'
+import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import { parseMessageTypes } from '../routing'
 import { checkRunMailbox } from './check-run'
 import { checkWorkerMailbox } from './check-worker'
@@ -25,15 +27,82 @@ import {
 } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
 import {
   hasRunBindingKey,
-  sessionCallerOf
+  sessionCallerOf,
+  type OrchestrationEntryCaller
 } from '../../../../orchestration/addressing/orchestration-caller-identity'
 import { orchestrationCallerIdentity } from '../runs/run-scope'
-import { assertSelectiveAckCaller } from '../../../orchestration/callers/selective-ack-caller'
 import {
   callerHoldsDispatchPane,
   dispatchFenced,
   isSupersededDispatch
 } from './dispatch-mailbox-fence'
+
+/** The ordinary consuming check and selective receipt replay authorize the same mailbox. */
+export function resolveMailboxCheckScope(
+  runtime: OrcaRuntimeService,
+  db: OrchestrationDb,
+  params: Pick<
+    MailboxCheckParams,
+    'terminal' | 'terminalPaneKey' | 'run' | 'peek' | 'all' | 'unread'
+  >,
+  orchestrationCaller: OrchestrationEntryCaller | undefined
+) {
+  const handle = params.terminal ?? 'unknown'
+  const livePane = runtime.getTerminalPaneKey(handle)
+  const caller = orchestrationCallerIdentity(runtime, {
+    handle,
+    session: orchestrationCaller,
+    // A live runtime handle is authoritative; pane metadata is only the restart fallback.
+    paneKey: livePane ?? params.terminalPaneKey
+  })
+  const paneKey = caller.paneKey ?? undefined
+  const boundRun = hasRunBindingKey(caller) ? db.getCurrentRunForCoordinator(caller) : undefined
+  const consumingCheck = params.peek !== true && params.all !== true && params.unread !== false
+  // run_unbound names the caller's direct mailbox, not a Run.
+  const unboundOnly = params.run === ORCHESTRATION_UNBOUND_RUN_ID
+  const callerScope = { handle, livePane, caller, paneKey, consumingCheck }
+  if (!unboundOnly && (params.run || boundRun)) {
+    return { ...callerScope, kind: 'run' as const, boundRun }
+  }
+
+  const activeDispatch = db.getActiveDispatchForIdentity(handle, paneKey)
+  // Reading another pane's Dispatch mail is wrong in every mode, so peek is fenced too.
+  if (activeDispatch && !callerHoldsDispatchPane(activeDispatch, paneKey)) {
+    throw dispatchFenced()
+  }
+  const remoteAttachment =
+    !activeDispatch && paneKey ? db.findActiveRemoteAttachmentForPane(paneKey) : undefined
+  if (
+    remoteAttachment &&
+    !db.isRemoteAttachmentProcessCurrent({
+      dispatchId: remoteAttachment.dispatch_id,
+      paneKey: paneKey ?? null,
+      processIncarnation: runtime.getTerminalProcessIncarnation(handle)
+    })
+  ) {
+    throw new OrchestrationError(
+      'dispatch_inactive',
+      `Dispatch ${remoteAttachment.dispatch_id} is no longer attached to this worker process.`
+    )
+  }
+  if ((activeDispatch || remoteAttachment) && !unboundOnly) {
+    return { ...callerScope, kind: 'dispatch' as const, activeDispatch, remoteAttachment }
+  }
+
+  // A superseded Attempt must receive a stop signal, not an empty checkpoint.
+  const settledDispatch = consumingCheck ? db.getLatestDispatchForTerminal(handle) : undefined
+  if (settledDispatch && isSupersededDispatch(settledDispatch)) {
+    throw dispatchFenced()
+  }
+  if (!hasRunBindingKey(caller) && consumingCheck) {
+    throw new OrchestrationError(
+      'stable_pane_required',
+      `Terminal ${handle} has no live pane and no active Dispatch, so a consuming check here can never receive mail. Run check from the agent's own live terminal.`,
+      orchestrationSkillRecoveryData()
+    )
+  }
+  return { ...callerScope, kind: 'direct' as const, unboundOnly }
+}
 
 async function checkMailbox(
   params: MailboxCheckParams,
@@ -48,18 +117,10 @@ async function checkMailbox(
   }: RpcContext
 ): Promise<unknown> {
   const db = runtime.getOrchestrationDb()
-  const handle = params.terminal ?? 'unknown'
   const typeFilter = parseMessageTypes(params.types)
+  const scope = resolveMailboxCheckScope(runtime, db, params, orchestrationCaller)
+  const { handle, livePane, caller, paneKey, consumingCheck } = scope
 
-  const caller = orchestrationCallerIdentity(runtime, {
-    handle,
-    session: orchestrationCaller,
-    // Why: a live runtime handle is authoritative; pane metadata is only the restart fallback.
-    paneKey: runtime.getTerminalPaneKey(handle) ?? params.terminalPaneKey
-  })
-  const paneKey = caller.paneKey ?? undefined
-  const boundRun = hasRunBindingKey(caller) ? db.getCurrentRunForCoordinator(caller) : undefined
-  const consumingCheck = params.peek !== true && params.all !== true && params.unread !== false
   const reader = sessionCallerOf(orchestrationCaller)
   // Mail this check takes may still wait as a card in a chat's queue; that card must not run too.
   // The item line is read for this answer only; the check's recorded receipt never holds it.
@@ -78,12 +139,9 @@ async function checkMailbox(
         : withReplyFollowUps(runtime, db, reader, result)
     )
   }
-  const livePane = runtime.getTerminalPaneKey(handle)
   const process = runtime.getTerminalProcessIncarnation(handle)
   const revalidateCaller = () => {
-    if (params.ackIds) {
-      assertSelectiveAckCaller(orchestrationCaller, runtime, handle, process)
-    }
+    reader?.revalidateAckLease?.()
     if (
       runtime.getTerminalPaneKey(handle) !== livePane ||
       runtime.getTerminalProcessIncarnation(handle) !== process
@@ -94,11 +152,10 @@ async function checkMailbox(
       )
     }
   }
-  // run_unbound is the id the caller's own direct mail (bot item mail) carries, not a Run.
-  const unboundOnly = params.run === ORCHESTRATION_UNBOUND_RUN_ID
   const reconciliation = new CheckMailReconciliation(runtime, db, signal)
   try {
-    if (!unboundOnly && (params.run || boundRun)) {
+    if (scope.kind === 'run') {
+      const { boundRun } = scope
       const result = await checkRunMailbox({
         params,
         runtime,
@@ -142,27 +199,8 @@ async function checkMailbox(
       )
     }
 
-    const activeDispatch = db.getActiveDispatchForIdentity(handle, paneKey)
-    // Why: reading another pane's Dispatch mail is wrong in every mode, so peek is fenced too.
-    if (activeDispatch && !callerHoldsDispatchPane(activeDispatch, paneKey)) {
-      throw dispatchFenced()
-    }
-    const remoteAttachment =
-      !activeDispatch && paneKey ? db.findActiveRemoteAttachmentForPane(paneKey) : undefined
-    if (
-      remoteAttachment &&
-      !db.isRemoteAttachmentProcessCurrent({
-        dispatchId: remoteAttachment.dispatch_id,
-        paneKey: paneKey ?? null,
-        processIncarnation: runtime.getTerminalProcessIncarnation(handle)
-      })
-    ) {
-      throw new OrchestrationError(
-        'dispatch_inactive',
-        `Dispatch ${remoteAttachment.dispatch_id} is no longer attached to this worker process.`
-      )
-    }
-    if ((activeDispatch || remoteAttachment) && !unboundOnly) {
+    if (scope.kind === 'dispatch') {
+      const { activeDispatch, remoteAttachment } = scope
       return await releasing(
         await checkWorkerMailbox({
           params,
@@ -182,19 +220,7 @@ async function checkMailbox(
         })
       )
     }
-    // A superseded Attempt must receive a stop signal, not an empty checkpoint; this outranks pane rebind advice.
-    const settledDispatch = consumingCheck ? db.getLatestDispatchForTerminal(handle) : undefined
-    if (settledDispatch && isSupersededDispatch(settledDispatch)) {
-      throw dispatchFenced()
-    }
-    // Without a live pane or Dispatch, an empty consuming inbox would disguise a stale caller as still waiting.
-    if (!hasRunBindingKey(caller) && consumingCheck) {
-      throw new OrchestrationError(
-        'stable_pane_required',
-        `Terminal ${handle} has no live pane and no active Dispatch, so a consuming check here can never receive mail. Run check from the agent's own live terminal.`,
-        orchestrationSkillRecoveryData()
-      )
-    }
+    const { unboundOnly } = scope
     return await releasing(
       await checkDirectMailbox({
         params: unboundOnly ? { ...params, run: undefined } : params,

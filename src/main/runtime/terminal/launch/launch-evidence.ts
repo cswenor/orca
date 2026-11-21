@@ -8,12 +8,7 @@ import type { DaemonLaunchNote } from '../../../daemon/protocol/daemon-launch-no
  *  identity fences an async check; never persisted, so a main restart starts unknown. */
 export type LaunchEvidence =
   | { readonly kind: 'unknown' }
-  | {
-      readonly kind: 'gone'
-      readonly incarnationId: PtyIncarnationId | null
-      /** A missing restart recipe does not by itself prove a tokenless caller. */
-      readonly callerToken: string | null | undefined
-    }
+  | { readonly kind: 'gone'; readonly incarnationId: PtyIncarnationId | null }
   | {
       readonly kind: 'held'
       readonly incarnationId: PtyIncarnationId | null
@@ -64,21 +59,13 @@ export function holdLaunch(
   pty.launchEvidence = { kind: 'held', incarnationId, ...launch }
 }
 
-/** A fresh launch only has a recipe when all launch fields are known. */
-export function recordFreshLaunch(
-  pty: PtyLaunchFacts,
-  launch: Partial<HeldLaunch> & { tokenInjected?: boolean } = {}
-): void {
-  const { agent, token, config, tokenInjected } = launch
+/** A freshly started process: its own launch is held, and any other process runs none. */
+export function recordFreshLaunch(pty: PtyLaunchFacts, launch: Partial<HeldLaunch> = {}): void {
+  const { agent, token, config } = launch
   pty.launchEvidence =
     agent && token && config
       ? { kind: 'held', incarnationId: pty.incarnationId, agent, token, config }
-      : {
-          kind: 'gone',
-          incarnationId: pty.incarnationId,
-          callerToken:
-            token && pty.incarnationId ? token : token || tokenInjected ? undefined : null
-        }
+      : { kind: 'gone', incarnationId: pty.incarnationId }
 }
 
 /** A finished command or confirmed exit; sticky for this process until a fresh launch. */
@@ -86,17 +73,7 @@ export function retireLaunch(
   pty: PtyLaunchFacts,
   incarnationId: PtyIncarnationId | null = pty.incarnationId
 ): void {
-  const previous = pty.launchEvidence
-  // Terminal output can retire a recipe, but cannot prove the process was launched without a token.
-  const confirmedTokenless =
-    previous?.kind === 'gone' &&
-    previous.incarnationId === incarnationId &&
-    previous.callerToken === null
-  pty.launchEvidence = {
-    kind: 'gone',
-    incarnationId,
-    callerToken: confirmedTokenless ? null : undefined
-  }
+  pty.launchEvidence = { kind: 'gone', incarnationId }
   pty.launchConfig = null
 }
 
@@ -119,8 +96,9 @@ export function retireReplacedLaunch(pty: PtyLaunchFacts, next: PtyIncarnationId
   }
 }
 
-/** A reattach can't override evidence main proved about the same process. An absent daemon note
- *  clears the launch recipe but cannot distinguish a retired launch from a note never armed. */
+/** A reattach to process `incarnationId` can't revive or replace what main proved about it. Else a
+ *  retired note proves the launch gone; anything else is unknown, returned when a foreground check
+ *  of the note may settle it. */
 export function recordReattachedLaunch(
   pty: PtyLaunchFacts,
   incarnationId: PtyIncarnationId | undefined,
@@ -131,8 +109,7 @@ export function recordReattachedLaunch(
     return null
   }
   if (note === null && incarnationId) {
-    pty.launchEvidence = { kind: 'gone', incarnationId, callerToken: undefined }
-    pty.launchConfig = null
+    retireLaunch(pty, incarnationId)
     return null
   }
   const pending: LaunchEvidence = { kind: 'unknown' }

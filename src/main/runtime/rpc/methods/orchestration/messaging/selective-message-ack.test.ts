@@ -138,66 +138,30 @@ it.each([{ run: '' }, { run: ' ' }, { run: null }, { run: 17 }, { run: {} }, { r
   }
 )
 
-it('refuses a stale terminal even when a saved pane and request ID are supplied', async () => {
-  const { db, runtime, activeRunId } = harness.setup()
-  const selected = db.insertMessage({
-    from: 'term_sender',
-    to: `run:${activeRunId}`,
-    subject: 'leave unread'
-  })
+it('uses the same stable pane requirement as an ordinary consuming check', async () => {
+  const { db, runtime } = harness.setup(false)
+  const terminal = 'term_coord'
+  const selected = db.insertMessage({ from: 'term_sender', to: terminal, subject: 'leave unread' })
   vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(null)
   vi.mocked(runtime.getTerminalProcessIncarnation).mockReturnValue(null)
   const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
-  await expect(
-    dispatcher.dispatch({
-      id: 'rpc_stale_selective_ack',
-      authToken: 'test',
-      method: 'orchestration.ackMessages',
-      params: {
-        terminal: 'term_coord',
-        terminalPaneKey: harness.coordinatorPaneKey,
-        ackIds: [selected.id]
-      },
-      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
-      orchestrationRequestId: 'stale_terminal_request'
+  const request = {
+    id: 'rpc_missing_pane',
+    authToken: 'test',
+    orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+    orchestrationRequestId: 'missing_pane'
+  }
+  for (const [method, params] of [
+    ['orchestration.check', { terminal }],
+    ['orchestration.ackMessages', { terminal, ackIds: [selected.id] }]
+  ] as const) {
+    await expect(dispatcher.dispatch({ ...request, method, params })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'stable_pane_required' }
     })
-  ).resolves.toMatchObject({ ok: false, error: { code: 'consumer_fenced' } })
+  }
   expect(db.getMessageById(selected.id)?.read).toBe(0)
 })
-
-it.each([null, 'different-pane'])(
-  'refuses a hosted caller whose mailbox routing pane is %s',
-  async (routingPane) => {
-    const { db, runtime, activeRunId } = harness.setup()
-    const selected = db.insertMessage({
-      from: 'term_sender',
-      to: `run:${activeRunId}`,
-      subject: 'leave unread'
-    })
-    const hostedAuthority = runtime.getOrchestrationDispatchAuthority('term_coord')
-    vi.mocked(runtime.getOrchestrationDispatchAuthority).mockReturnValue(hostedAuthority)
-    vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(routingPane)
-    const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
-    await expect(
-      dispatcher.dispatch({
-        id: 'rpc_unverified_routing_pane',
-        authToken: 'test',
-        method: 'orchestration.ackMessages',
-        params: {
-          terminal: 'term_coord',
-          terminalPaneKey: harness.coordinatorPaneKey,
-          ackIds: [selected.id]
-        },
-        orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
-        orchestrationRequestId: 'unverified_routing_pane_request'
-      })
-    ).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'consumer_fenced', data: { effectsApplied: false } }
-    })
-    expect(db.getMessageById(selected.id)?.read).toBe(0)
-  }
-)
 
 it.each(['worker_done', 'heartbeat'] as const)(
   'refuses a mixed selection containing a %s lifecycle report without taking mail',
@@ -221,61 +185,40 @@ it.each(['worker_done', 'heartbeat'] as const)(
   }
 )
 
-it.each(['pty:retained', 'structured:released'])(
-  'does not treat %s as live mailbox authority',
-  async (process) => {
-    const { db, runtime, ctx } = harness.setup(false)
-    const selected = db.insertMessage({ from: 'sender', to: 'term_coord', subject: 'unread' })
-    vi.mocked(runtime.getLiveTerminalPaneKey).mockReturnValue(
-      process.startsWith('structured:') ? harness.coordinatorPaneKey : null
-    )
-    vi.mocked(runtime.getTerminalProcessIncarnation).mockReturnValue(process)
-    await expect(
-      harness.call(
-        'orchestration.ackMessages',
-        { terminal: 'term_coord', ackIds: [selected.id] },
-        ctx
-      )
-    ).rejects.toMatchObject({ code: 'consumer_fenced', data: { effectsApplied: false } })
-    expect(db.getMessageById(selected.id)?.read).toBe(0)
-  }
-)
-
-it.each([undefined, 'pty:prior'])(
-  'requires the current Dispatch process (recorded: %s)',
-  async (process) => {
-    const { db, runtime, ctx } = harness.setup()
-    const pane = 'tab_worker:33333333-3333-4333-9333-333333333333'
-    vi.mocked(runtime.getTerminalPaneKey).mockImplementation((handle) =>
-      handle === 'term_worker' ? pane : harness.coordinatorPaneKey
-    )
-    const task = db.createTask({ spec: 'worker before binding' })
-    const dispatch = createRootDispatch(db, task.id, 'term_worker', pane, undefined, process)
-    const selected = db.insertMessage({
-      from: 'term_coord',
-      to: `dispatch:${dispatch.id}`,
-      runId: dispatch.run_id,
-      subject: 'pre-bind question'
+it('uses the ordinary Dispatch pane fence without adding a launch check', async () => {
+  const { db, runtime, ctx } = harness.setup()
+  const terminal = 'term_worker'
+  const pane = 'tab_worker:33333333-3333-4333-9333-333333333333'
+  const task = db.createTask({ spec: 'worker before binding' })
+  const dispatch = createRootDispatch(db, task.id, terminal, pane, undefined, 'pty:prior')
+  const selected = db.insertMessage({
+    from: 'term_coord',
+    to: `dispatch:${dispatch.id}`,
+    runId: dispatch.run_id,
+    subject: 'pre-bind status'
+  })
+  vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(
+    'tab_replacement:44444444-4444-4444-9444-444444444444'
+  )
+  for (const [method, params] of [
+    ['orchestration.check', { terminal }],
+    ['orchestration.ackMessages', { terminal, ackIds: [selected.id] }]
+  ] as const) {
+    await expect(harness.call(method, params, ctx)).rejects.toMatchObject({
+      code: 'consumer_fenced'
     })
-    const check = () =>
-      harness.call(
-        'orchestration.ackMessages',
-        { terminal: 'term_worker', ackIds: [selected.id] },
-        ctx
-      )
-    await expect(check()).rejects.toMatchObject({ code: 'consumer_fenced' })
-    expect(db.getMessageById(selected.id)?.read).toBe(0)
-    reattachDispatchConsumer(db, {
-      dispatchId: dispatch.id,
-      paneKey: pane,
-      processIncarnation: 'runtime_test:term_worker:1'
-    })
-    await expect(check()).resolves.toMatchObject({ markedIds: [selected.id] })
   }
-)
+  expect(db.getMessageById(selected.id)?.read).toBe(0)
+  vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(pane)
+  await expect(
+    harness.call('orchestration.ackMessages', { terminal, ackIds: [selected.id] }, ctx)
+  ).resolves.toMatchObject({ dispatchId: dispatch.id, markedIds: [selected.id] })
+})
 
 it('only writes read state and a receipt, including on dispatcher replay', async () => {
   const { db, runtime } = harness.setup(false)
+  const fingerprint = db.readLocalMutationCallerFingerprint()
+  expect(fingerprint).toEqual(expect.any(String))
   const selected = db.insertMessage({ from: 'sender', to: 'term_coord', subject: 'unread' })
   db.db
     .prepare(
@@ -302,22 +245,7 @@ it('only writes read state and a receipt, including on dispatcher replay', async
     ok: false,
     error: { code: 'invalid_argument' }
   })
-  const ack = {
-    ...request,
-    orchestrationRequestId: 'selected-request',
-    orchestrationCompatibilityEvidence: {
-      terminalHandle: 'term_coord',
-      paneKey: harness.coordinatorPaneKey
-    }
-  }
-  await expect(
-    dispatcher.dispatch({
-      ...ack,
-      orchestrationCompatibilityEvidence: { terminalHandle: 'term_other' }
-    })
-  ).resolves.toMatchObject({ ok: false, error: { code: 'consumer_fenced' } })
-  expect(db.readLocalMutationCallerFingerprint()).toBeUndefined()
-  const fingerprint = db.getOrCreateLocalMutationCallerFingerprint()
+  const ack = { ...request, orchestrationRequestId: 'selected-request' }
   db.db
     .prepare(
       `INSERT INTO mutation_receipts
@@ -351,6 +279,7 @@ it('only writes read state and a receipt, including on dispatcher replay', async
   expect(db.getMessageById(selected.id)).toEqual({ ...original, read: 1 })
   expect(db.getMutationReceipt(fingerprint, ack.orchestrationRequestId)?.state).toBe('completed')
   expect(db.getMutationReceipt(fingerprint, 'expired-request')).toEqual(expired)
+  expect(db.readLocalMutationCallerFingerprint()).toBe(fingerprint)
   expect(refreshSenders).not.toHaveBeenCalled()
   expect(recordInteraction).not.toHaveBeenCalled()
   await expect(
@@ -429,164 +358,56 @@ it('refuses a new selection at capacity without pruning and replays the original
   ).toEqual({ count: MUTATION_RECEIPT_MAX_ROWS - 1 })
 })
 
-it('requires current launch proof for local selective calls to a token-launched pane', async () => {
-  const { db, runtime } = harness.setup(false)
-  const handle = 'term_coord'
-  const launchToken = 'current-launch'
-  vi.mocked(runtime.getSelectiveAckPtyLaunchToken).mockReturnValue(launchToken)
-  const selected = db.insertMessage({ from: 'sender', to: handle, subject: 'selective' })
-  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
-  const request = {
-    id: 'rpc_selective_agent_pane',
-    authToken: 'test',
-    method: 'orchestration.ackMessages',
-    params: { terminal: handle, ackIds: [selected.id] },
-    orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
-    orchestrationRequestId: 'agent-pane-selective'
-  }
-  const evidence = { terminalHandle: handle, paneKey: harness.coordinatorPaneKey }
-  const fenced = {
-    ok: false,
-    error: {
-      code: 'consumer_fenced',
-      message: expect.stringContaining('Run it from that pane or use an ordinary check'),
-      data: { effectsApplied: false }
-    }
-  }
-  await expect(dispatcher.dispatch(request)).resolves.toMatchObject(fenced)
-  await expect(
-    dispatcher.dispatch({
-      ...request,
-      orchestrationCompatibilityEvidence: { ...evidence, launchToken: 'previous-launch' }
-    })
-  ).resolves.toMatchObject(fenced)
-  expect(db.getMessageById(selected.id)?.read).toBe(0)
-  expect(db.readLocalMutationCallerFingerprint()).toBeUndefined()
-
-  await expect(
-    dispatcher.dispatch({
-      ...request,
-      orchestrationCompatibilityEvidence: { ...evidence, launchToken }
-    })
-  ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
-  await expect(dispatcher.dispatch(request)).resolves.toMatchObject(fenced)
-  expect(db.getMessageById(selected.id)?.read).toBe(1)
-
-  const remote = db.insertMessage({ from: 'sender', to: handle, subject: 'paired selective' })
-  vi.mocked(runtime.getSelectiveAckPtyLaunchToken).mockReturnValue(undefined)
-  await expect(
-    dispatcher.dispatch({
-      ...request,
-      orchestrationRequestId: 'unverified-restored-pane',
-      params: { ...request.params, ackIds: [remote.id] }
-    })
-  ).resolves.toMatchObject({
-    ok: false,
-    error: {
-      code: 'consumer_fenced',
-      message: expect.stringContaining('cannot verify this pane'),
-      data: { effectsApplied: false }
-    }
-  })
-  expect(db.getMessageById(remote.id)?.read).toBe(0)
-  const pairedRequest = { ...request, params: { ...request.params, ackIds: [remote.id] } }
-  const paired = {
-    pairedDeviceId: 'test-device',
-    authenticatedCallerFingerprint: 'test-fingerprint',
-    clientKind: 'runtime' as const
-  }
-  await expect(dispatcher.dispatch(pairedRequest, paired)).resolves.toMatchObject({
-    ok: true,
-    result: { markedIds: [remote.id] }
-  })
-  const authority = runtime.getOrchestrationDispatchAuthority(handle)!
-  vi.mocked(runtime.getOrchestrationDispatchAuthority).mockReturnValue({
-    ...authority,
-    launchTokenHash: 'different-target-launch'
-  })
-  await expect(dispatcher.dispatch(pairedRequest, paired)).resolves.toMatchObject({
-    ok: true,
-    result: { markedIds: [remote.id], mutation: { replayed: true } }
-  })
-})
-
-it('accepts matching host evidence for a confirmed tokenless pane and rejects stale evidence', async () => {
-  const { db, runtime } = harness.setup(false)
-  const handle = 'term_coord'
-  const host = { kind: 'wsl', hostId: 'local', distro: 'Ubuntu' } as const
-  const authority = runtime.getOrchestrationDispatchAuthority(handle)!
-  vi.mocked(runtime.getOrchestrationDispatchAuthority).mockReturnValue({
-    ...authority,
-    hostScope: host
-  })
-  const selected = db.insertMessage({ from: 'sender', to: handle, subject: 'selective' })
-  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
-  const request = {
-    id: 'rpc_selective_hosted_shell',
-    authToken: 'test',
-    method: 'orchestration.ackMessages',
-    params: { terminal: handle, ackIds: [selected.id] },
-    orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
-    orchestrationRequestId: 'hosted-shell-selective'
-  }
-  const evidence = { terminalHandle: handle, paneKey: harness.coordinatorPaneKey, host }
-  for (const stale of [
-    { ...evidence, host: { ...host, distro: 'old-distro' } },
-    { ...evidence, launchToken: 'retired-launch' }
-  ]) {
-    await expect(
-      dispatcher.dispatch({ ...request, orchestrationCompatibilityEvidence: stale })
-    ).resolves.toMatchObject({ ok: false, error: { code: 'consumer_fenced' } })
-  }
-  expect(db.getMessageById(selected.id)?.read).toBe(0)
-  await expect(
-    dispatcher.dispatch({ ...request, orchestrationCompatibilityEvidence: evidence })
-  ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
-})
-
-it('rejects a relay-only SSH attachment as a selective mailbox caller', async () => {
-  const { db, runtime } = harness.setup(false)
-  vi.mocked(runtime.getOrchestrationDispatchAuthority).mockRestore()
-  vi.mocked(runtime.getTerminalPaneKey).mockRestore()
-  vi.mocked(runtime.getLiveTerminalPaneKey).mockRestore()
-  vi.mocked(runtime.getTerminalProcessIncarnation).mockRestore()
-  const handle = 'term_bridge'
-  const attachment = runtime.registerOrchestrationCompatibilitySshAttachment('test-ssh', 'live', {
-    handle,
-    paneKey: harness.coordinatorPaneKey,
-    processIncarnation: 'relay:worker'
-  })
-  try {
-    const selected = db.insertMessage({ from: 'sender', to: handle, subject: 'leave unread' })
+it.each([undefined, 'paired-device'])(
+  'admits the same execution mailbox as ordinary check (paired device: %s)',
+  async (pairedDeviceId) => {
+    const { db, runtime } = harness.setup(false)
+    const terminal = 'term_coord'
+    const makeMessage = (subject: string) =>
+      db.insertMessage({ from: 'sender', to: terminal, subject })
+    const selected = makeMessage('selected')
+    const remaining = makeMessage('remaining')
     const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
-    expect(runtime.getLiveTerminalPaneKey(handle)).toBe(harness.coordinatorPaneKey)
-    expect(runtime.getTerminalProcessIncarnation(handle)).toBe('relay:worker')
+    const transport = pairedDeviceId
+      ? {
+          pairedDeviceId,
+          authenticatedCallerFingerprint: 'test-fingerprint',
+          clientKind: 'runtime' as const
+        }
+      : undefined
+    const request = {
+      id: 'rpc_selective_parity',
+      authToken: 'test',
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION
+    }
     await expect(
       dispatcher.dispatch(
         {
-          id: 'rpc_selective_ssh',
-          authToken: 'test',
+          ...request,
           method: 'orchestration.ackMessages',
-          params: { terminal: handle, ackIds: [selected.id] },
-          orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
-          orchestrationRequestId: 'relay_attachment_selective'
+          params: { terminal, ackIds: [selected.id] },
+          orchestrationRequestId: 'selective-parity'
         },
+        transport
+      )
+    ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
+    expect(db.getMessageById(remaining.id)?.read).toBe(0)
+    await expect(
+      dispatcher.dispatch(
         {
-          pairedDeviceId: 'test-device',
-          authenticatedCallerFingerprint: 'test-fingerprint',
-          clientKind: 'runtime'
-        }
+          ...request,
+          method: 'orchestration.check',
+          params: { terminal },
+          orchestrationRequestId: 'ordinary-parity'
+        },
+        transport
       )
     ).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'consumer_fenced', data: { effectsApplied: false } }
+      ok: true,
+      result: { messages: [{ id: remaining.id }] }
     })
-    expect(db.getMessageById(selected.id)?.read).toBe(0)
-    expect(db.getMutationReceipt('test-fingerprint', 'relay_attachment_selective')).toBeUndefined()
-  } finally {
-    runtime.releaseOrchestrationCompatibilitySshAttachment(attachment.attachmentId)
   }
-})
+)
 
 it('replays only on the original process and implicit Run', async () => {
   const { db, runtime, activeRunId } = harness.setup()

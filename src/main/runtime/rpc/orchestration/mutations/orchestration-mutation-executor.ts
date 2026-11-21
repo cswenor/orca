@@ -59,8 +59,7 @@ export class OrchestrationMutationExecutor {
     invoke: (mutation?: DurableMutationInvocation) => unknown,
     callerFingerprintOverride?: string,
     /** The resolved caller; its identity joins the payload so another caller cannot replay it. */
-    caller?: OrchestrationEntryCaller,
-    paired = false
+    caller?: OrchestrationEntryCaller
   ): Promise<unknown> {
     if (isSelectiveAckRequest(request)) {
       return await runSelectiveAckMutation(
@@ -69,8 +68,7 @@ export class OrchestrationMutationExecutor {
         params,
         invoke,
         callerFingerprintOverride,
-        caller,
-        paired
+        caller
       )
     }
     const requestId = request.orchestrationRequestId

@@ -1,8 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import {
-  ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV,
-  readInjectedAgentSessionId
-} from '../../../shared/agent-session/lifecycle/launch/agent-session-caller-env'
+import { readInjectedAgentSessionId } from '../../../shared/agent-session/lifecycle/launch/agent-session-caller-env'
 import { readOrchestrationCompatibilityEvidence } from '../../../shared/orchestration/orchestration-compatibility-evidence'
 import { BOT_ITEM_WRITE_METHOD_NAMES } from '../../../shared/bots/bot-items'
 import { CONNECTOR_POST_METHOD_NAMES } from '../../../shared/connector-action-contract'
@@ -54,7 +51,6 @@ export class OrchestrationRequestEvidence {
   // A chat's session id means nothing on another server, so reads there go like a shell's.
   private readonly remoteRead: RuntimeOrchestrationEnvelope
   private readonly chatCaller: RuntimeOrchestrationEnvelope['orchestrationCompatibilityEvidence']
-  private readonly mailboxLease: string | undefined
 
   constructor(env: NodeJS.ProcessEnv) {
     this.orchestration = createOrchestrationCompatibilityEnvelope(env)
@@ -65,7 +61,6 @@ export class OrchestrationRequestEvidence {
       orchestrationCompatibilityEvidence: Object.keys(shell).length > 0 ? shell : undefined
     }
     this.chatCaller = createChatCallerEvidence(env)
-    this.mailboxLease = env[ORCA_AGENT_SESSION_MAILBOX_LEASE_ENV]
   }
 
   envelopeFor(
@@ -74,24 +69,9 @@ export class OrchestrationRequestEvidence {
   ): RuntimeOrchestrationEnvelope {
     if (method.startsWith('orchestration.')) {
       const base = request.remote && !request.mutation ? this.remoteRead : this.orchestration
-      const evidence = base.orchestrationCompatibilityEvidence
-      if (method === 'orchestration.ackMessages' && request.remote) {
-        // A paired call targets a mailbox on the execution host, not the source shell's pane.
-        // Keep the session claim, if any, so structured callers still hit the host-boundary check.
-        const agentSessionId = evidence?.agentSessionId
-        return {
-          compatibilityInvocationId: request.requestId ?? base.compatibilityInvocationId,
-          orchestrationCompatibilityEvidence: agentSessionId ? { agentSessionId } : undefined
-        }
-      }
-      const mailboxLease = method === 'orchestration.ackMessages' ? this.mailboxLease : undefined
       return {
         ...base,
-        compatibilityInvocationId: request.requestId ?? base.compatibilityInvocationId,
-        orchestrationCompatibilityEvidence:
-          evidence?.agentSessionId && mailboxLease
-            ? { ...evidence, agentSessionMailboxLease: mailboxLease }
-            : evidence
+        compatibilityInvocationId: request.requestId ?? base.compatibilityInvocationId
       }
     }
     return namesChatCaller(method) && !request.remote && this.chatCaller
