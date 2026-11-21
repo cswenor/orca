@@ -68,7 +68,8 @@ export function resolveMailboxCheckScope(
   if (params.ackIds) {
     assertSelectableMailboxHandle(db, handle)
   }
-  const livePane = runtime.getTerminalPaneKey(handle)
+  const readOnly = params.ackIds !== undefined
+  const livePane = runtime.getTerminalPaneKey(handle, undefined, readOnly)
   const caller = orchestrationCallerIdentity(runtime, {
     handle,
     session: orchestrationCaller,
@@ -109,7 +110,7 @@ export function resolveMailboxCheckScope(
     !db.isRemoteAttachmentProcessCurrent({
       dispatchId: remoteAttachment.dispatch_id,
       paneKey: paneKey ?? null,
-      processIncarnation: runtime.getTerminalProcessIncarnation(handle)
+      processIncarnation: runtime.getTerminalProcessIncarnation(handle, undefined, readOnly)
     })
   ) {
     throw new OrchestrationError(
@@ -171,15 +172,16 @@ async function checkMailbox(
         : withReplyFollowUps(runtime, db, reader, result)
     )
   }
-  const process = runtime.getTerminalProcessIncarnation(handle)
+  const readOnly = params.ackIds !== undefined
+  const process = runtime.getTerminalProcessIncarnation(handle, undefined, readOnly)
   const revalidateCaller = () => {
     reader?.revalidateAckLease?.()
     if (params.ackIds) {
       assertSelectableMailboxHandle(db, handle)
     }
     if (
-      runtime.getTerminalPaneKey(handle) !== livePane ||
-      runtime.getTerminalProcessIncarnation(handle) !== process
+      runtime.getTerminalPaneKey(handle, undefined, readOnly) !== livePane ||
+      runtime.getTerminalProcessIncarnation(handle, undefined, readOnly) !== process
     ) {
       throw new OrchestrationError(
         'consumer_fenced',

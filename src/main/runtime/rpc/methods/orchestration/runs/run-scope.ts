@@ -29,18 +29,22 @@ export type RunScopeParams = {
   legacyCoordinatorRunId?: string
   // Attest user-supplied handles against this trusted handle.
   callerEvidence?: OrchestrationCompatibilityEvidence
+  readOnlyCaller?: boolean
 }
 
 // Mutable Run bindings require attested callers to name only themselves.
 export function assertCallerHandleMatchesEvidence(
   runtime: OrcaRuntimeService,
   callerTerminalHandle: string,
-  callerEvidence?: OrchestrationCompatibilityEvidence
+  callerEvidence?: OrchestrationCompatibilityEvidence,
+  readOnlyCaller = false
 ): void {
   if (!callerEvidence) {
     return
   }
-  const attested = runtime.verifyOrchestrationCompatibilityCaller(callerEvidence)
+  const attested = readOnlyCaller
+    ? runtime.verifyOrchestrationCompatibilityCaller(callerEvidence, { readOnly: true })
+    : runtime.verifyOrchestrationCompatibilityCaller(callerEvidence)
   if (attested && attested.terminalHandle !== callerTerminalHandle) {
     throw new OrchestrationError(
       'consumer_fenced',
@@ -160,7 +164,12 @@ export function resolveRunScope(runtime: OrcaRuntimeService, params: RunScopePar
       orchestrationSkillRecoveryData()
     )
   }
-  assertCallerHandleMatchesEvidence(runtime, params.callerTerminalHandle, params.callerEvidence)
+  assertCallerHandleMatchesEvidence(
+    runtime,
+    params.callerTerminalHandle,
+    params.callerEvidence,
+    params.readOnlyCaller
+  )
   if (explicit && params.legacyCoordinatorRunId === explicit.id) {
     return explicit
   }
@@ -169,7 +178,8 @@ export function resolveRunScope(runtime: OrcaRuntimeService, params: RunScopePar
     session: params.callerSession,
     paneKey:
       params.callerSession === undefined
-        ? (params.callerPaneKey ?? runtime.getTerminalPaneKey(params.callerTerminalHandle))
+        ? (params.callerPaneKey ??
+          runtime.getTerminalPaneKey(params.callerTerminalHandle, undefined, params.readOnlyCaller))
         : undefined
   })
   if (!hasRunBindingKey(caller)) {

@@ -28,14 +28,15 @@ export function callerHoldsResidualDispatch(
   residual: DispatchContextRow,
   runId: string,
   paneKey: string | undefined,
-  assigneeSessionId: string | null
+  assigneeSessionId: string | null,
+  readOnly = false
 ): boolean {
   return (
     residual.run_id !== runId &&
     (residual.assignee_orca_session_id === null ||
       residual.assignee_orca_session_id === assigneeSessionId) &&
     callerHoldsDispatchPane(residual, paneKey) &&
-    currentDispatchAssigneeRun(runtime, db, residual)?.id === runId
+    currentDispatchAssigneeRun(runtime, db, residual, readOnly)?.id === runId
   )
 }
 
@@ -89,8 +90,15 @@ export async function checkRunPendingMail(args: {
       return false
     }
     return (
-      callerHoldsResidualDispatch(runtime, db, residual, run.id, paneKey, caller.orcaSessionId) &&
-      Boolean(residualAck || !db.hasOutstandingMailboxDelivery(address))
+      callerHoldsResidualDispatch(
+        runtime,
+        db,
+        residual,
+        run.id,
+        paneKey,
+        caller.orcaSessionId,
+        params.ackIds !== undefined
+      ) && Boolean(residualAck || !db.hasOutstandingMailboxDelivery(address))
     )
   }
   if (params.ackIds) {
@@ -133,7 +141,8 @@ export async function checkRunPendingMail(args: {
                       current,
                       run.id,
                       paneKey,
-                      caller.orcaSessionId
+                      caller.orcaSessionId,
+                      true
                     )
                   ) {
                     throw dispatchFenced()

@@ -30,3 +30,22 @@ export type TerminalHandleRecord = Readonly<{
   /** Issue-time stamp of the pane main bound a terminal handle for; read only by recoverTerminalPane. */
   issuedForPaneKey?: string
 }>
+
+export function syntheticPtyHandleRecord(
+  handle: string,
+  runtimeId: string,
+  rendererGraphEpoch: number,
+  pty: RuntimePtyWorktreeRecord
+): TerminalHandleRecord {
+  const id = `pty:${pty.ptyId}`
+  return {
+    handle,
+    runtimeId,
+    rendererGraphEpoch,
+    worktreeId: pty.worktreeId,
+    tabId: id,
+    leafId: id,
+    ptyId: pty.ptyId,
+    ptyGeneration: 0
+  }
+}

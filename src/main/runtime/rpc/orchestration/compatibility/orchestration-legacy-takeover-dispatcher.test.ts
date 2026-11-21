@@ -268,6 +268,9 @@ describe('legacy compatibility after explicit takeover', () => {
 
   it('refuses a retained legacy Dispatch reached through a declared pane', async () => {
     const h = createHarness()
+    vi.spyOn(h.runtime, 'getExistingTerminalHandleForPaneKey').mockImplementation((key) =>
+      key === WORKER_PANE ? WORKER_HANDLE : undefined
+    )
     const mail = h.db.insertMessage({
       runId: h.adoptedRunId,
       from: COORDINATOR_HANDLE,

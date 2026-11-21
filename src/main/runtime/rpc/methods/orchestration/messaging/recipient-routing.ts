@@ -61,13 +61,14 @@ export function assertDispatchMailboxDeliverable(
 export function currentDispatchAssigneeRun(
   runtime: OrcaRuntimeService,
   db: OrchestrationDb,
-  dispatch: DispatchContextRow
+  dispatch: DispatchContextRow,
+  readOnly = false
 ) {
   const key = dispatchAssigneeCoordinatorKey(
     dispatch,
     () => Boolean(db.getFederatedDispatch(dispatch.id)),
-    (handle) => runtime.getLiveTerminalPaneKey(handle),
-    (handle) => runtime.getTerminalProcessIncarnation(handle)
+    (handle) => runtime.getLiveTerminalPaneKey(handle, undefined, readOnly),
+    (handle) => runtime.getTerminalProcessIncarnation(handle, undefined, readOnly)
   )
   return !key
     ? undefined

@@ -24,9 +24,10 @@ import {
   ptyHoldsRecordedSurface,
   type PtySurfaceTopology
 } from '../surface/pty-recorded-surface-topology'
-import type {
-  PtyIncarnationHandleRecord,
-  TerminalHandleRecord
+import {
+  syntheticPtyHandleRecord,
+  type PtyIncarnationHandleRecord,
+  type TerminalHandleRecord
 } from '../identity/terminal-handle-records'
 
 import { readTerminalTail } from '../output/tail/terminal-tail-read'
@@ -202,7 +203,8 @@ export abstract class OrcaRuntimeWithBuildPtyTerminalSummary extends OrcaRuntime
 
   protected getLivePtyForHandle(
     handle: string,
-    context?: TerminalIdentityReadContext
+    context?: TerminalIdentityReadContext,
+    readOnly = false
   ): {
     record: TerminalHandleRecord
     pty: RuntimePtyWorktreeRecord
@@ -213,10 +215,19 @@ export abstract class OrcaRuntimeWithBuildPtyTerminalSummary extends OrcaRuntime
         ? context.reversePtyIds(handle)[0]
         : this.terminalIdentity.firstReversePtyId(handle)
       const pty = ptyId ? this.ptysById.get(ptyId) : null
-      if (pty) {
-        // Why: graph reload clears renderer handle records, but runtime-owned PTY handles remain the caller's control identity.
+      if (pty && !readOnly) {
         this.issuePtyHandle(pty, context)
         record = this.handles.get(handle)
+      } else if (
+        pty &&
+        this.handleByPtyId.get(pty.ptyId) === handle &&
+        !this.getRetainedHandlePty(handle)
+      ) {
+        // Inspect the record an ordinary read would restore without changing the bindings.
+        return {
+          pty,
+          record: syntheticPtyHandleRecord(handle, this.runtimeId, this.rendererGraphEpoch, pty)
+        }
       }
     }
     if (
@@ -234,8 +245,10 @@ export abstract class OrcaRuntimeWithBuildPtyTerminalSummary extends OrcaRuntime
       return null
     }
     // Why: renderer adoption can race with CLI reads; keep ptyId → handle populated so summaries don't mint a second handle for the same terminal.
-    this.setPtyHandle(record.ptyId, handle)
-    context?.changedReverseBinding(record.ptyId)
+    if (!readOnly) {
+      this.setPtyHandle(record.ptyId, handle)
+      context?.changedReverseBinding(record.ptyId)
+    }
     return { record, pty }
   }
 
@@ -296,7 +309,8 @@ export abstract class OrcaRuntimeWithBuildPtyTerminalSummary extends OrcaRuntime
     const handle =
       this.handleByLeafKey.get(this.getLeafKey(pane.tabId, pane.leafId)) ??
       this.handleByPtyId.get(pty.ptyId)
-    return handle && this.getLivePtyForHandle(handle)?.pty === pty ? handle : undefined
+    const live = handle && this.getLivePtyForHandle(handle, undefined, true)
+    return live && live.pty === pty ? handle : undefined
   }
 
   getTerminalHandleForPaneKey(

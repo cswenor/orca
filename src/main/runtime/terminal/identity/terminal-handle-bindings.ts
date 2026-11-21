@@ -1,6 +1,9 @@
 import type { TerminalIdentityReadContext } from '../query/terminal-identity-read-context'
 import { OrcaRuntimeWithBuildPtyTerminalSummary } from '../query/pty-terminal-summary'
-import type { PtyIncarnationHandleRecord } from './terminal-handle-records'
+import {
+  syntheticPtyHandleRecord,
+  type PtyIncarnationHandleRecord
+} from './terminal-handle-records'
 import type {
   RuntimeLeafRecord,
   RuntimePtyWorktreeRecord
@@ -170,17 +173,10 @@ export abstract class OrcaRuntimeWithBindPtyIncarnationHandle extends OrcaRuntim
     if (!existingHandle) {
       this.terminalIdentity.addSynthetic(handle)
     }
-    const syntheticId = `pty:${pty.ptyId}`
-    this.terminalIdentity.setHandle(handle, {
+    this.terminalIdentity.setHandle(
       handle,
-      runtimeId: this.runtimeId,
-      rendererGraphEpoch: this.rendererGraphEpoch,
-      worktreeId: pty.worktreeId,
-      tabId: syntheticId,
-      leafId: syntheticId,
-      ptyId: pty.ptyId,
-      ptyGeneration: 0
-    })
+      syntheticPtyHandleRecord(handle, this.runtimeId, this.rendererGraphEpoch, pty)
+    )
     this.setPtyHandle(pty.ptyId, handle)
     return handle
   }

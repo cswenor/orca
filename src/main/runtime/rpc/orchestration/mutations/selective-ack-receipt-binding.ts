@@ -154,7 +154,7 @@ function selectiveAckReceiptBinding(
   )
   const { handle, livePane, paneKey } = scope
   // This is the authorized consumer snapshot, not a second origin check.
-  const process = runtime.getTerminalProcessIncarnation(handle)
+  const process = runtime.getTerminalProcessIncarnation(handle, undefined, true)
   const structuredSessionId =
     sessionIdFromStructuredWorkerIncarnation(process) ??
     scope.caller.orcaSessionId ??
@@ -167,7 +167,7 @@ function selectiveAckReceiptBinding(
     lease !== undefined ||
     (structuredSessionId === null &&
       process !== null &&
-      runtime.getLiveTerminalPaneKey(handle) !== null)
+      runtime.getLiveTerminalPaneKey(handle, undefined, true) !== null)
   const target = {
     process,
     lease,
@@ -197,7 +197,8 @@ function selectiveAckReceiptBinding(
     callerPaneKey: paneKey,
     callerSession: caller,
     requireCurrentConsumer: true,
-    callerEvidence: request.orchestrationCompatibilityEvidence
+    callerEvidence: request.orchestrationCompatibilityEvidence,
+    readOnlyCaller: true
   })
   // A retained binding stays legacy even if the request omits compatibility evidence.
   if (
@@ -228,7 +229,8 @@ function selectiveAckReceiptBinding(
       dispatch,
       currentRun.id,
       paneKey,
-      scope.caller.orcaSessionId
+      scope.caller.orcaSessionId,
+      true
     )
   ) {
     const scope = {

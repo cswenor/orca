@@ -12,6 +12,7 @@ import {
   equivalentLegacyPaneKey,
   legacyCoordinatorReadOnly
 } from './orchestration-legacy-process-identity'
+import { isSelectiveAckRequest } from '../callers/selective-ack-caller'
 
 export class LegacyCoordinatorAuthority {
   constructor(private readonly runtime: OrcaRuntimeService) {}
@@ -46,7 +47,9 @@ export class LegacyCoordinatorAuthority {
       if (!run?.coordinator_pane_key && principal?.status !== 'committed') {
         return undefined
       }
-      const caller = this.runtime.verifyOrchestrationCompatibilityCaller(evidence)
+      const caller = isSelectiveAckRequest(request)
+        ? this.runtime.verifyOrchestrationCompatibilityCaller(evidence, { readOnly: true })
+        : this.runtime.verifyOrchestrationCompatibilityCaller(evidence)
       // Trusted DB binding admits its owner even where attestation is unavailable.
       if (run && (ownsRunBinding(run, caller) || ownsRunBinding(run, evidence))) {
         return undefined
@@ -58,6 +61,9 @@ export class LegacyCoordinatorAuthority {
       ) {
         return undefined
       }
+      throw legacyCoordinatorReadOnly()
+    }
+    if (isSelectiveAckRequest(request)) {
       throw legacyCoordinatorReadOnly()
     }
     const existing = db.getLegacyCoordinatorPrincipal(adoption.adopted_run_id)

@@ -174,10 +174,13 @@ export abstract class OrcaRuntimeWithSerializeHeadlessTerminalBuffer extends Orc
   // Concrete-PTY handles cannot adopt later pane occupants; only pre-spawn handles may bind their first PTY (#7718).
   resolveLiveLeafForHandle(
     handle: string,
-    context?: TerminalIdentityReadContext
+    context?: TerminalIdentityReadContext,
+    readOnly = false
   ): { ptyId: string | null } | null {
     // Repair runtime-owned handles cleared by renderer reload before reading their records.
-    this.getLivePtyForHandle(handle, context)
+    if (!readOnly) {
+      this.getLivePtyForHandle(handle, context)
+    }
     const record = this.handles.get(handle)
     if (!record) {
       return null

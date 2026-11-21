@@ -157,12 +157,16 @@ export class OrchestrationLegacyCompatibility {
     if (claimedHandle && claimedHandle !== evidence.terminalHandle) {
       return undefined
     }
+    const verifyCaller = () =>
+      isSelectiveAckRequest(request)
+        ? this.runtime.verifyOrchestrationCompatibilityCaller(evidence, { readOnly: true })
+        : this.runtime.verifyOrchestrationCompatibilityCaller(evidence)
     const dispatch = db.getActiveDispatchForIdentity(evidence.terminalHandle, evidence.paneKey)
     if (dispatch) {
       if (dispatch.contract_version !== CURRENT_CONTRACT_VERSION) {
         return undefined
       }
-      const caller = this.runtime.verifyOrchestrationCompatibilityCaller(evidence)
+      const caller = verifyCaller()
       return caller &&
         caller.terminalHandle === evidence.terminalHandle &&
         db.getActiveDispatchForIdentity(caller.terminalHandle, caller.paneKey)?.id === dispatch.id
@@ -171,7 +175,7 @@ export class OrchestrationLegacyCompatibility {
     }
     const remoteAttachment = db.findActiveRemoteAttachmentForPane(evidence.paneKey)
     if (remoteAttachment) {
-      const caller = this.runtime.verifyOrchestrationCompatibilityCaller(evidence)
+      const caller = verifyCaller()
       return caller &&
         caller.terminalHandle === evidence.terminalHandle &&
         db.findActiveRemoteAttachmentForPane(caller.paneKey)?.dispatch_id ===
@@ -194,7 +198,7 @@ export class OrchestrationLegacyCompatibility {
     if (legacyCandidate) {
       return undefined
     }
-    const caller = this.runtime.verifyOrchestrationCompatibilityCaller(evidence)
+    const caller = verifyCaller()
     if (
       !caller ||
       caller.terminalHandle !== evidence.terminalHandle ||

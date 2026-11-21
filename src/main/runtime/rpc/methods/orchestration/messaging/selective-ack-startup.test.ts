@@ -208,10 +208,14 @@ it('waits for every PTY routing page before acknowledging direct-addressed Run m
   expect(db.getUnreadMessages(terminal.handle)).toEqual([])
 })
 
-it('acknowledges from a pane-only caller with an already issued live terminal', async () => {
+it.each([false, true])('marks pane mail without rebinding (reload: %s)', async (reloading) => {
   const db = new OrchestrationDb(':memory:')
   try {
-    const { runtime, write } = await createRuntime(db, { launchAgent: null, headless: true })
+    const { runtime, write } = await createRuntime(db, { launchAgent: null, headless: !reloading })
+    if (reloading) {
+      expect(runtime.markRendererReloading(1)).not.toBeNull()
+      expect(runtime['handles'].has(TERMINAL_HANDLE)).toBe(false)
+    }
     expect(runtime.getExistingTerminalHandleForPaneKey(PANE_KEY)).toBe(TERMINAL_HANDLE)
     const run = createBoundRun(db, 'Pane-only caller')
     const selected = db.insertMessage({
@@ -233,6 +237,9 @@ it('acknowledges from a pane-only caller with an already issued live terminal', 
     }
     expect(response.result).toMatchObject({ markedIds: [selected.id] })
     expect(db.getMessageById(selected.id)?.read).toBe(1)
+    if (reloading) {
+      expect(runtime['handles'].has(TERMINAL_HANDLE)).toBe(false)
+    }
     expect(write).not.toHaveBeenCalled()
   } finally {
     db.close()

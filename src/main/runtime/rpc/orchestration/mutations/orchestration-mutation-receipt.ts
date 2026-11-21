@@ -57,7 +57,7 @@ export function replayStableCallerParams(
     const paneKey =
       property === 'from' && typeof source.senderPaneKey === 'string'
         ? source.senderPaneKey
-        : runtime.getTerminalPaneKey(handle)
+        : runtime.getTerminalPaneKey(handle, undefined, method === 'orchestration.ackMessages')
     if (paneKey) {
       const leafId = parsePaneKey(paneKey)?.leafId
       result[property] = leafId ? { paneLeafId: leafId } : { paneKey }

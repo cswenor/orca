@@ -67,9 +67,10 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
 
   protected getPaneKeyForTerminalHandle(
     handle: string,
-    context?: TerminalIdentityReadContext
+    context?: TerminalIdentityReadContext,
+    readOnly?: boolean
   ): string | null {
-    const pty = this.getLivePtyForHandle(handle, context)?.pty
+    const pty = this.getLivePtyForHandle(handle, context, readOnly)?.pty
     const livePaneKey = (context && pty ? context.paneOf(pty) : this.paneOfPty(pty)).paneKey
     if (livePaneKey) {
       return livePaneKey

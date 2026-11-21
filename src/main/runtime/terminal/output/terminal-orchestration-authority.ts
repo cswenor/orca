@@ -33,7 +33,8 @@ export abstract class OrcaRuntimeWithGetOrchestrationDispatchAuthority extends O
   protected abstract getExistingTerminalHandlesForPtyId(ptyId: string): string[]
   getTerminalProcessIncarnation(
     handle: string,
-    context?: TerminalIdentityReadContext
+    context?: TerminalIdentityReadContext,
+    readOnly?: boolean
   ): string | null {
     const structured = resolveStructuredWorkerAuthority(
       handle,
@@ -43,7 +44,7 @@ export abstract class OrcaRuntimeWithGetOrchestrationDispatchAuthority extends O
     if (structured) {
       return structured.identity.processIncarnation
     }
-    const live = this.getLivePtyForHandle(handle, context)
+    const live = this.getLivePtyForHandle(handle, context, readOnly)
     const record = live?.record ?? this.handles.get(handle)
     const ptyId = record?.ptyId
     const pty = live?.pty ?? (ptyId ? this.ptysById.get(ptyId) : this.getRetainedHandlePty(handle))
@@ -125,7 +126,8 @@ export abstract class OrcaRuntimeWithGetOrchestrationDispatchAuthority extends O
 
   getOrchestrationDispatchAuthority(
     terminalHandle: string,
-    context?: TerminalIdentityReadContext
+    context?: TerminalIdentityReadContext,
+    readOnly = false
   ): OrchestrationCompatibilityTerminalAuthority | null {
     const structured = resolveStructuredWorkerAuthority(
       terminalHandle,
@@ -148,16 +150,13 @@ export abstract class OrcaRuntimeWithGetOrchestrationDispatchAuthority extends O
     let ptyId: string | null
     try {
       ptyId =
-        this.getLivePtyForHandle(terminalHandle, context)?.pty.ptyId ??
-        this.resolveLiveLeafForHandle(terminalHandle)?.ptyId ??
+        this.getLivePtyForHandle(terminalHandle, context, readOnly)?.pty.ptyId ??
+        this.resolveLiveLeafForHandle(terminalHandle, undefined, readOnly)?.ptyId ??
         null
     } catch {
       return null
     }
-    if (!ptyId) {
-      return null
-    }
-    const pty = this.ptysById.get(ptyId)
+    const pty = ptyId ? this.ptysById.get(ptyId) : undefined
     if (!pty?.connected) {
       return null
     }
@@ -168,9 +167,9 @@ export abstract class OrcaRuntimeWithGetOrchestrationDispatchAuthority extends O
     return {
       runtimeId: this.runtimeId,
       terminalHandle,
-      ptyId,
+      ptyId: pty.ptyId,
       worktreeId: pty.worktreeId,
-      processIncarnation: this.getTerminalProcessIncarnation(terminalHandle, context),
+      processIncarnation: this.getTerminalProcessIncarnation(terminalHandle, context, readOnly),
       paneKey: (context ? context.paneOf(pty) : this.paneOfPty(pty)).paneKey,
       launchTokenHash: pty.launchToken
         ? createHash('sha256').update(pty.launchToken).digest('hex')

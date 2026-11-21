@@ -185,6 +185,9 @@ describe('a structured worker that names itself by session id', () => {
       runId,
       subject: 'status read under pane authority'
     })
+    vi.spyOn(h.runtime, 'getExistingTerminalHandleForPaneKey').mockImplementation((key) =>
+      key === paneKey ? handle : undefined
+    )
     const paneOnly = orchestrationRequest('orchestration.ackMessages', {
       terminalPaneKey: paneKey,
       ackIds: [paneMail.id]

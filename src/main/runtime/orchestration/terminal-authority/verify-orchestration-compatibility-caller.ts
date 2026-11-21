@@ -9,17 +9,20 @@ import type {
   OrchestrationCompatibilityTerminalAuthority
 } from './orchestration-compatibility-authority'
 import { createHash } from 'node:crypto'
+import type { TerminalIdentityReadContext } from '../../terminal/query/terminal-identity-read-context'
 import type { RuntimePtyWorktreeRecord } from '../../terminal/records/runtime-terminal-state-records'
 import { parsePaneKey } from '../../../../shared/workspace-layout/stable-pane-id'
 
 export abstract class OrcaRuntimeWithVerifyOrchestrationCompatibilityCaller extends OrcaRuntimeWithSerializeHeadlessTerminalBuffer {
   abstract getOrchestrationDispatchAuthority(
-    handle: string
+    handle: string,
+    context?: TerminalIdentityReadContext,
+    readOnly?: boolean
   ): OrchestrationCompatibilityTerminalAuthority | null
 
   verifyOrchestrationCompatibilityCaller(
     evidence: OrchestrationCompatibilityEvidence | null | undefined,
-    options?: { currentRuntimeLaunchSufficient?: boolean }
+    options?: { currentRuntimeLaunchSufficient?: boolean; readOnly?: boolean }
   ): OrchestrationCompatibilityCallerAuthority | null {
     const terminalHandle =
       typeof evidence?.terminalHandle === 'string' ? evidence.terminalHandle.trim() : ''
@@ -46,7 +49,11 @@ export abstract class OrcaRuntimeWithVerifyOrchestrationCompatibilityCaller exte
           )
         : null
     }
-    const terminal = this.getOrchestrationDispatchAuthority(terminalHandle)
+    const terminal = this.getOrchestrationDispatchAuthority(
+      terminalHandle,
+      undefined,
+      options?.readOnly
+    )
     if (
       !terminal?.processIncarnation ||
       !terminal.paneKey ||

@@ -74,7 +74,7 @@ export const ORCHESTRATION_CALLER_METHODS = [
     params: CallerShowParams,
     // Dispatch already admitted the environment's session; do not resolve another caller from params.
     handler: (
-      _params,
+      params,
       { orchestrationCaller, orchestrationCompatibilityEvidence, runtime }
     ): OrchestrationCallerShowResult => ({
       caller:
@@ -88,7 +88,8 @@ export const ORCHESTRATION_CALLER_METHODS = [
       terminal:
         !orchestrationCaller &&
         runtime.verifyOrchestrationCompatibilityCaller(orchestrationCompatibilityEvidence, {
-          currentRuntimeLaunchSufficient: true
+          currentRuntimeLaunchSufficient: true,
+          readOnly: params.readOnly
         }) !== null
     })
   }),

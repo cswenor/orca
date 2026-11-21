@@ -72,7 +72,8 @@ export async function checkRunMailbox(args: {
     callerSession,
     requireCurrentConsumer: true,
     legacyCoordinatorRunId,
-    callerEvidence: orchestrationCompatibilityEvidence
+    callerEvidence: orchestrationCompatibilityEvidence,
+    readOnlyCaller: params.ackIds !== undefined
   })
   const generation = run.consumer_generation
   const address = `run:${run.id}`
@@ -86,7 +87,8 @@ export async function checkRunMailbox(args: {
       callerSession,
       requireCurrentConsumer: true,
       legacyCoordinatorRunId,
-      callerEvidence: orchestrationCompatibilityEvidence
+      callerEvidence: orchestrationCompatibilityEvidence,
+      readOnlyCaller: params.ackIds !== undefined
     })
     if (currentRun.id !== run.id || currentRun.consumer_generation !== generation) {
       throw new OrchestrationError(

@@ -132,7 +132,8 @@ export abstract class RuntimeConstructionServices extends RuntimeAgentStatusRead
   protected abstract paneOfPty(pty: PtyPaneSource | null | undefined): PtyPane
   protected abstract getLivePtyForHandle(
     handle: string,
-    context?: IdentityRead
+    context?: IdentityRead,
+    readOnly?: boolean
   ): TerminalHandlePty | null
   protected abstract getLiveLeafForHandle(handle: string): TerminalHandleLeaf
   protected abstract getTerminalPtyForHandle(handle: string): { pty: RuntimePtyWorktreeRecord }

@@ -218,20 +218,28 @@ export abstract class OrcaRuntimeWithAdoptTerminalOrphansFromInventory extends O
   }
 
   // Dispatch uses remint-stable pane keys; unresolved handles return null so best-effort dispatch can proceed.
-  getTerminalPaneKey(handle: string, context?: TerminalIdentityReadContext): string | null {
+  getTerminalPaneKey(
+    handle: string,
+    context?: TerminalIdentityReadContext,
+    readOnly?: boolean
+  ): string | null {
     return (
       resolveStructuredWorkerAuthority(
         handle,
         this.getOrchestrationDbIfAvailable?.() ?? null,
         context?.structured
       )?.identity.paneKey ??
-      this.getPaneKeyForTerminalHandle(handle, context) ??
+      this.getPaneKeyForTerminalHandle(handle, context, readOnly) ??
       this.getOrchestrationCompatibilitySshTerminal(handle, context)?.paneKey ??
       null
     )
   }
 
-  getLiveTerminalPaneKey(handle: string, context?: TerminalIdentityReadContext): string | null {
+  getLiveTerminalPaneKey(
+    handle: string,
+    context?: TerminalIdentityReadContext,
+    readOnly?: boolean
+  ): string | null {
     const structured = resolveStructuredWorkerAuthority(
       handle,
       this.getOrchestrationDbIfAvailable?.() ?? null
@@ -240,19 +248,21 @@ export abstract class OrcaRuntimeWithAdoptTerminalOrphansFromInventory extends O
       // Runtime-owned structured workers accept direct mail even at rest; sending starts their agent.
       return structured.identity.paneKey
     }
-    const runtimePty = this.getLivePtyForHandle(handle, context)
+    const runtimePty = this.getLivePtyForHandle(handle, context, readOnly)
     if (runtimePty) {
       return runtimePty.pty.connected
         ? (context ? context.paneOf(runtimePty.pty) : this.paneOfPty(runtimePty.pty)).paneKey
         : null
     }
     try {
-      const leaf = this.resolveLiveLeafForHandle(handle, context)
+      const leaf = this.resolveLiveLeafForHandle(handle, context, readOnly)
       if (!leaf?.ptyId) {
         return this.getOrchestrationCompatibilitySshTerminal(handle, context)?.paneKey ?? null
       }
       const pty = this.ptysById.get(leaf.ptyId)
-      return pty?.connected === false ? null : this.getPaneKeyForTerminalHandle(handle, context)
+      return pty?.connected === false
+        ? null
+        : this.getPaneKeyForTerminalHandle(handle, context, readOnly)
     } catch {
       return null
     }
