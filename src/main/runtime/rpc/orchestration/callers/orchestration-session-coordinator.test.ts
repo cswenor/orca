@@ -174,10 +174,27 @@ describe('a structured worker that names itself by session id', () => {
       error: { code: 'request_mismatch' }
     })
     current.lease = { ...current.lease, unreconciled: false }
+    const paneMail = h.db.insertMessage({
+      from: 'term_sender',
+      to: `dispatch:${dispatch.id}`,
+      runId,
+      subject: 'status read under pane authority'
+    })
+    const paneOnly = orchestrationRequest('orchestration.ackMessages', {
+      terminalPaneKey: paneKey,
+      ackIds: [paneMail.id]
+    })
+    current.lease = { ...current.lease, unreconciled: true }
+    vi.mocked(h.runtime.ensureStructuredAgentSessionHost).mockImplementationOnce(async () => {
+      await Promise.resolve()
+      current.lease = { ...current.lease, unreconciled: false }
+    })
+    expect(resultOf(await h.dispatch(paneOnly))).toMatchObject({ markedIds: [paneMail.id] })
+    expect(resultOf(await h.dispatch(paneOnly))).toMatchObject({ mutation: { replayed: true } })
     expect(resultOf(await h.dispatch(injected))).toMatchObject({ markedIds: [message.id] })
     expect(resultOf(await h.dispatch(injected))).toMatchObject({ mutation: { replayed: true } })
     current.lease = { ...current.lease, runtimeFence: current.lease.runtimeFence + 1 }
-    for (const request of [injected, declared]) {
+    for (const request of [injected, declared, paneOnly]) {
       expect(await h.dispatch(request)).toMatchObject({
         ok: false,
         error: { code: 'request_mismatch' }

@@ -139,14 +139,17 @@ function selectiveAckReceiptBinding(
   const scope = resolveMailboxCheckScope(
     runtime,
     db,
-    { terminal: handle, terminalPaneKey, run },
+    { terminal: handle, terminalPaneKey, run, ackIds },
     caller
   )
   const { livePane, paneKey } = scope
   // This is the authorized consumer snapshot, not a second origin check.
   const process = runtime.getTerminalProcessIncarnation(handle)
   const structuredSessionId =
-    sessionIdFromStructuredWorkerIncarnation(process) ?? scope.caller.orcaSessionId
+    sessionIdFromStructuredWorkerIncarnation(process) ??
+    scope.caller.orcaSessionId ??
+    (scope.kind === 'dispatch' ? scope.activeDispatch?.assignee_orca_session_id : undefined) ??
+    null
   const lease =
     sessionCallerOf(caller)?.revalidateAckLease?.() ??
     (structuredSessionId ? currentWorkerLease(structuredSessionId) : undefined)

@@ -212,6 +212,30 @@ describe('legacy compatibility after explicit takeover', () => {
     expect(h.db.getMessageById(unread.id)?.read).toBe(0)
   })
 
+  it('refuses a retained legacy Dispatch reached through a declared pane', async () => {
+    const h = createHarness()
+    const mail = h.db.insertMessage({
+      runId: h.adoptedRunId,
+      from: COORDINATOR_HANDLE,
+      to: `dispatch:${h.dispatchId}`,
+      subject: 'current-format row in a retained legacy mailbox'
+    })
+    await expect(
+      h.dispatcher.dispatch({
+        id: 'legacy-selective-pane',
+        authToken: 'caller-token',
+        method: 'orchestration.ackMessages',
+        params: { terminalPaneKey: WORKER_PANE, ackIds: [mail.id] },
+        orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+        orchestrationRequestId: 'legacy-selective-pane'
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'legacy_read_only', data: { effectsApplied: false } }
+    })
+    expect(h.db.getMessageById(mail.id)?.read).toBe(0)
+  })
+
   it('uses ordinary routing precedence for retained worker evidence', async () => {
     const { db, dispatcher } = createHarness()
     const mail = db.insertMessage({

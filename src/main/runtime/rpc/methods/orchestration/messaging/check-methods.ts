@@ -37,6 +37,7 @@ import {
   dispatchFenced,
   isSupersededDispatch
 } from './dispatch-mailbox-fence'
+import { LEGACY_CONTRACT_VERSION } from '../../../../orchestration/db/contract-constants'
 
 /** The ordinary consuming check and selective receipt replay authorize the same mailbox. */
 export function resolveMailboxCheckScope(
@@ -44,7 +45,7 @@ export function resolveMailboxCheckScope(
   db: OrchestrationDb,
   params: Pick<
     MailboxCheckParams,
-    'terminal' | 'terminalPaneKey' | 'run' | 'peek' | 'all' | 'unread'
+    'terminal' | 'terminalPaneKey' | 'run' | 'peek' | 'all' | 'unread' | 'ackIds'
   >,
   orchestrationCaller: OrchestrationEntryCaller | undefined
 ) {
@@ -70,6 +71,13 @@ export function resolveMailboxCheckScope(
   // Reading another pane's Dispatch mail is wrong in every mode, so peek is fenced too.
   if (activeDispatch && !callerHoldsDispatchPane(activeDispatch, paneKey)) {
     throw dispatchFenced()
+  }
+  if (params.ackIds && activeDispatch?.contract_version === LEGACY_CONTRACT_VERSION) {
+    throw new OrchestrationError(
+      'legacy_read_only',
+      'Legacy mailboxes do not support selective acknowledgment.',
+      { effectsApplied: false }
+    )
   }
   const remoteAttachment =
     !activeDispatch && paneKey ? db.findActiveRemoteAttachmentForPane(paneKey) : undefined

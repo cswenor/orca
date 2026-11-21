@@ -36,19 +36,34 @@ export function waitForRestoredWorkerCallerIdentity(
     request.method === 'orchestration.send'
       ? typeof params.type !== 'string' || !isDispatchMutationMessageType(params.type)
       : request.method === 'orchestration.check' && params.wait === true
-  if (typeof handle !== 'string' || !handle || skipsIdentityCheck) {
-    return null
-  }
-  const waiting =
+  const terminal = typeof handle === 'string' ? handle : undefined
+  const restore =
+    terminal &&
+    !skipsIdentityCheck &&
     runtime.startupWorkerAuthority.isPending() &&
-    (runtime.getTerminalPaneKey(handle) === null ||
-      runtime.getTerminalProcessIncarnation(handle) === null)
+    (runtime.getTerminalPaneKey(terminal) === null ||
+      runtime.getTerminalProcessIncarnation(terminal) === null)
       ? runtime.startupWorkerAuthority.wait(signals)
       : null
-  if (isSelectiveAckRequest(request) && isStructuredWorkerHandle(handle)) {
-    return waiting
-      ? waiting.then(() => runtime.ensureStructuredAgentSessionHost())
-      : runtime.ensureStructuredAgentSessionHost()
+  if (!isSelectiveAckRequest(request)) {
+    return restore
   }
-  return waiting
+  const initializeDeclaredWorker = (): Promise<void> | null => {
+    const handle = terminal?.trim() || 'unknown'
+    const declaredPane = params.terminalPaneKey
+    const pane =
+      runtime.getTerminalPaneKey(handle) ??
+      (typeof declaredPane === 'string' ? declaredPane.trim() : undefined)
+    return isStructuredWorkerHandle(handle) ||
+      (pane &&
+        runtime.getOrchestrationDb().getActiveDispatchForIdentity(handle, pane)
+          ?.assignee_orca_session_id)
+      ? runtime.ensureStructuredAgentSessionHost()
+      : null
+  }
+  return restore
+    ? restore.then(async () => {
+        await initializeDeclaredWorker()
+      })
+    : initializeDeclaredWorker()
 }

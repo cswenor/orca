@@ -36,8 +36,9 @@ The CLI supplies the required request ID. `--retry-request` is read-only: it
 replays an existing receipt only for the original process or concrete chat lease
 and mailbox generation. If it cannot replay, inspect the mailbox before
 issuing a fresh acknowledgment.
-Released agent sessions cannot acknowledge wake-up mail until they are running
-again. Do not use this to discard mail the agent has not processed.
+When acting as an agent session, it must be running to acknowledge wake-up
+mail. A declared terminal or pane still follows ordinary check authorization.
+Do not use this to discard mail the agent has not processed.
 
 Do not combine `--ack-ids` with other read, acknowledgment, formatting or wait
 options. Both the CLI and the execution host need selective-ack support; older
