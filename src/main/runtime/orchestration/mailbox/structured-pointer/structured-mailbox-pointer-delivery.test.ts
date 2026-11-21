@@ -100,10 +100,10 @@ function harness(
     },
     getStructuredMailSends: (handle: string) =>
       [...records.values()].filter((row) => row.mailbox_handle === handle),
-    oldestStructuredMailboxWork: (handle: string) =>
+    oldestStructuredMailboxWork: (handle: string, settled: readonly string[]) =>
       Math.min(
         ...[...records.values()]
-          .filter((row) => row.mailbox_handle === handle)
+          .filter((row) => row.mailbox_handle === handle && !settled.includes(row.message_id))
           .map((row) => mail.get(row.message_id)?.sequence ?? 0),
         ...[...mail.values()]
           .filter((row) => row.to_handle === handle && !row.read && row.delivered_at === null)
@@ -353,6 +353,36 @@ it('does not wait for journal settlement that belongs only to later structured m
     const recovered = vi.fn()
     void Promise.resolve(h.delivery.whenIdle('dispatch:d1', through)).then(recovered)
     await Promise.resolve()
+    expect(recovered).toHaveBeenCalledOnce()
+  } finally {
+    release.resolve()
+    await h.delivery.whenIdle('dispatch:d1')
+  }
+})
+
+it('finishes startup after its reservation settles while later journal I/O is still pending', async () => {
+  const h = harness({ busy: true })
+  h.receive('restored')
+  const through = h.mail.get('restored')!.sequence
+  h.receive('later')
+  await h.deliver()
+  h.settle('restored', { kind: 'unreadable' })
+  const observe = h.host.observeMail!
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  vi.spyOn(h.host, 'observeMail').mockImplementation(async (attempt) => {
+    if (attempt.message_id === 'later') {
+      entered.resolve()
+      await release.promise
+    }
+    return observe(attempt)
+  })
+  h.delivery.withdrawStale(['dispatch:d1'])
+  const recovered = vi.fn()
+  void Promise.resolve(h.delivery.whenIdle('dispatch:d1', through)).then(recovered)
+  expect(recovered).not.toHaveBeenCalled()
+  try {
+    await entered.promise
     expect(recovered).toHaveBeenCalledOnce()
   } finally {
     release.resolve()

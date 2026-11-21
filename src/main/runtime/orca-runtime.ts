@@ -64,7 +64,7 @@ import { requireSwitchedOn } from './construction/require-sidebar-inputs-enabled
 import { HEADLESS_RUNTIME_WINDOW_ID } from '../../shared/remote-runtime/session-graph/runtime-session-contracts'
 import { getHostDisplayLabelOverrides } from '../../shared/execution-host/host-setting-overrides'
 import type { OrchestrationDb } from './orchestration/db/orchestration-db'
-import { continueRestoredWorkerMailSoon } from './rpc/methods/orchestration/messaging/settled-worker-follow-through'
+import { continueAllUnreadWorkerMail } from './rpc/methods/orchestration/messaging/settled-worker-follow-through'
 import { scrubBotToolSecrets } from './rpc/methods/bots-tools'
 import {
   PeerMailRelay,
@@ -296,7 +296,7 @@ class OrcaRuntimeService extends OrcaRuntimeSidebarBase {
   }
 
   protected continueRestoredWorkerMail(db: OrchestrationDb): Promise<void> {
-    const completion = continueRestoredWorkerMailSoon(this, db, () => this._orchestrationDb === db)
+    const completion = continueAllUnreadWorkerMail(this, db, () => this._orchestrationDb === db)
     botGroups.startBotGroupsSoon(this, () => this._orchestrationDb === db)
     return completion
   }

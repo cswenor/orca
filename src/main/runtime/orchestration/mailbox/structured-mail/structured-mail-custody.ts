@@ -4,6 +4,7 @@ import type { OrchestrationDb } from '../../db/orchestration-db'
 import type { OrchestrationCliCommand } from '../../workers/launch/orchestration-cli-command'
 import type { StructuredMailSendRow } from '../../db/messages/structured-mail-send-store'
 import type { StructuredMailboxPointerHost } from '../structured-pointer/structured-mailbox-pointer-host-contract'
+import { oldestStructuredWork } from '../structured-pointer/structured-mailbox-redrive-state'
 import type { StructuredPointerTarget } from '../structured-pointer/structured-mailbox-pointer-delivery'
 import { structuredMailboxCustody } from '../routing/structured-session-mail-target'
 import { structuredMailWasDeliveredWhole } from './structured-mail-whole'
@@ -158,14 +159,25 @@ export async function settleStructuredMailSends(input: {
   host: Pick<StructuredMailboxPointerHost, 'observe' | 'observeMail' | 'withdraw' | 'wakeQueue'>
   cliCommand: OrchestrationCliCommand
   owed: (sessionId: string, messageIds: readonly string[]) => QueuedMessageOwed
+  beforeWork: (oldest: () => number) => void
 }): Promise<{ outstanding: Set<string>; resend: StructuredMailResend[]; released: boolean }> {
   const { db, mailboxHandle, host } = input
   const outstanding = new Set<string>()
   const resend: StructuredMailResend[] = []
   // Once per chat after the pass, however many of its cards the queue may now hand over.
   const wake = new Set<string>()
+  const pendingEdges: string[] = []
   let released = false
+  // Stable reservations no longer hold startup open; retries and unsent wake/handback edges do.
+  const oldest = () => {
+    let sequence = oldestStructuredWork(db, mailboxHandle, outstanding, resend, 0)
+    for (const id of pendingEdges) {
+      sequence = Math.min(sequence, db.getMessageById(id)?.sequence ?? 0)
+    }
+    return sequence
+  }
   for (const row of db.getStructuredMailSends(mailboxHandle)) {
+    input.beforeWork(oldest)
     let observation = await observeStructuredMailAttempt(host, row)
     if (
       input.owed(row.session_id, [row.message_id]) === 'stale' &&
@@ -185,6 +197,9 @@ export async function settleStructuredMailSends(input: {
     }
     if (decision.wake) {
       wake.add(row.session_id)
+    }
+    if (decision.wake || decision.released) {
+      pendingEdges.push(row.message_id)
     }
     released ||= decision.released
   }

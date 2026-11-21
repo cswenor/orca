@@ -8,10 +8,7 @@ import {
   type OrchestrationMessageWaiter
 } from '../terminal-pointer/mailbox-pointer-eligibility'
 import { mintAgentSessionOperationId } from './structured-pointer-operation-id'
-import type {
-  StructuredMailFollowUp,
-  StructuredPointerDeliveryDependencies
-} from './structured-mailbox-pointer-host-contract'
+import type { StructuredPointerDeliveryDependencies } from './structured-mailbox-pointer-host-contract'
 import { completionReportFollowUp } from '../../workers/reports/report-follow-up-action'
 import { structuredMailMessage } from '../structured-mail/structured-mail-source'
 import type { StructuredMailSendRow } from '../../db/messages/structured-mail-send-store'
@@ -24,7 +21,10 @@ import { StructuredMailboxParking } from '../structured-mail/structured-mailbox-
 import { ownerAdjustedOwed, selectOwnedMail } from '../../structured-mail-owner-narrowing'
 import { StructuredMailSettledState } from '../structured-mail/structured-mail-settled-state'
 import * as mailCustody from '../structured-mail/structured-mail-custody'
-import { StructuredMailboxRedriveState } from './structured-mailbox-redrive-state'
+import {
+  oldestStructuredWork,
+  StructuredMailboxRedriveState
+} from './structured-mailbox-redrive-state'
 
 export type StructuredPointerTarget = {
   sessionId: string
@@ -45,7 +45,6 @@ export class OrchestrationStructuredMailboxPointerDelivery<
 
   private readonly authority: mailCustody.StructuredMailAuthority
   private readonly settledState = new StructuredMailSettledState()
-  private readonly replyFollowUp: StructuredMailFollowUp
   private readonly redeliver: (mailboxHandle: string) => void
 
   constructor(private readonly deps: StructuredPointerDeliveryDependencies<TWaiter>) {
@@ -54,9 +53,6 @@ export class OrchestrationStructuredMailboxPointerDelivery<
       ...deps,
       resolve: deps.resolveStructuredTarget
     })
-    // Without the runtime's own answer, a finished report still offers its follow-up.
-    this.replyFollowUp = (db, message, sessionId) =>
-      deps.replyFollowUp?.(db, message, sessionId) ?? completionReportFollowUp(db, message)
   }
 
   deliverForHandle(mailboxHandle: string, reservedTypes?: ReadonlySet<string>): boolean {
@@ -170,7 +166,6 @@ export class OrchestrationStructuredMailboxPointerDelivery<
       if (!db) {
         return
       }
-      this.redrives.beforeWork(mailboxHandle, db)
       // Earlier sends only when something they wait on moved: a fresh arrival or the next page
       // finds them reserved (stamped delivered), so selection skips them anyway.
       const owner = this.deps.resolveStructuredTarget(mailboxHandle)?.sessionId ?? null
@@ -182,6 +177,7 @@ export class OrchestrationStructuredMailboxPointerDelivery<
                 mailboxHandle,
                 host: this.deps.host,
                 cliCommand: this.deps.getCliCommand(),
+                beforeWork: (oldest) => this.redrives.beforeWork(mailboxHandle, oldest),
                 owed: (sessionId, messageIds) =>
                   ownerAdjustedOwed(
                     this.authority.owedTo(sessionId, mailboxHandle, messageIds),
@@ -206,11 +202,16 @@ export class OrchestrationStructuredMailboxPointerDelivery<
         }
         return
       }
-      for (const again of this.deps.host.mailHeld?.(target.sessionId) ? [] : resend) {
+      const retries = this.deps.host.mailHeld?.(target.sessionId) ? [] : resend
+      for (let i = 0; i < retries.length; i++) {
+        const again = retries[i]
         const message = db.getMessageById(again.row.message_id)
         if (!message || again.row.session_id !== target.sessionId) {
           continue
         }
+        this.redrives.beforeWork(mailboxHandle, () =>
+          oldestStructuredWork(db, mailboxHandle, outstanding, retries, i)
+        )
         if (
           (await this.admit(db, mailboxHandle, target, message, senderSnapshot, again)) === 'park'
         ) {
@@ -284,7 +285,8 @@ export class OrchestrationStructuredMailboxPointerDelivery<
       message,
       cliCommand: this.deps.getCliCommand(),
       senderSnapshot,
-      followUp: this.replyFollowUp(db, message, sessionId),
+      followUp:
+        this.deps.replyFollowUp?.(db, message, sessionId) ?? completionReportFollowUp(db, message),
       reportItem,
       conversationPlace: (from) => this.deps.conversationPlace?.(sessionId, from) ?? null
     })

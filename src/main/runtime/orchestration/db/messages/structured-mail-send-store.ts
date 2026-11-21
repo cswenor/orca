@@ -38,7 +38,11 @@ export function getStructuredMailSends(
 }
 
 /** Recovery can ignore journal I/O for later mail only if no older pointer work depends on it. */
-export function oldestStructuredMailboxWork(this: OrchestrationDb, mailbox: string): number {
+export function oldestStructuredMailboxWork(
+  this: OrchestrationDb,
+  mailbox: string,
+  settled: readonly string[]
+): number {
   const { sequence } =
     this.db
       .prepare(
@@ -53,9 +57,10 @@ export function oldestStructuredMailboxWork(this: OrchestrationDb, mailbox: stri
          SELECT COALESCE(message.sequence, 0) FROM structured_mail_sends AS send
           LEFT JOIN messages AS message ON message.id = send.message_id
           WHERE send.mailbox_handle = ?
+            AND send.message_id NOT IN (SELECT value FROM json_each(?))
        )`
       )
-      .get(mailbox, mailbox) ?? {}
+      .get(mailbox, mailbox, JSON.stringify(settled)) ?? {}
   return typeof sequence === 'number' ? sequence : Infinity
 }
 

@@ -1,7 +1,8 @@
 import type { OrchestrationDb } from '../../db/orchestration-db'
+import type { StructuredMailResend } from '../structured-mail/structured-mail-custody'
 
 export class StructuredMailboxRedriveState {
-  private readonly inFlight = new Map<string, number | OrchestrationDb>()
+  private readonly inFlight = new Map<string, number | (() => number)>()
   private readonly rerun = new Map<string, Set<string>>()
   private readonly idleWaiters = new Map<string, Map<number, PromiseWithResolvers<void>>>()
 
@@ -25,7 +26,7 @@ export class StructuredMailboxRedriveState {
     if (offering === undefined) {
       return undefined
     }
-    if (oldestSequence(mailbox, offering) > throughSequence) {
+    if (throughSequence !== Infinity && workSequence(offering) > throughSequence) {
       return undefined
     }
     let waiters = this.idleWaiters.get(mailbox)
@@ -41,13 +42,13 @@ export class StructuredMailboxRedriveState {
     return waiter.promise
   }
 
-  beforeWork(mailbox: string, oldest: number | OrchestrationDb): void {
+  beforeWork(mailbox: string, oldest: number | (() => number)): void {
     this.inFlight.set(mailbox, oldest)
     const waiters = this.idleWaiters.get(mailbox)
     if (!waiters) {
       return
     }
-    const sequence = oldestSequence(mailbox, oldest)
+    const sequence = workSequence(oldest)
     for (const [through, waiter] of waiters) {
       if (through < sequence) {
         waiters.delete(through)
@@ -72,6 +73,21 @@ export class StructuredMailboxRedriveState {
   }
 }
 
-function oldestSequence(mailbox: string, work: number | OrchestrationDb): number {
-  return typeof work === 'number' ? work : work.oldestStructuredMailboxWork(mailbox)
+function workSequence(work: number | (() => number)): number {
+  return typeof work === 'number' ? work : work()
+}
+
+/** Ignore stable cards and retries already attempted in this pass, not the rest of the queue. */
+export function oldestStructuredWork(
+  db: OrchestrationDb,
+  mailbox: string,
+  outstanding: ReadonlySet<string>,
+  retries: readonly StructuredMailResend[],
+  from: number
+): number {
+  const settled = new Set(outstanding)
+  for (let i = from; i < retries.length; i++) {
+    settled.delete(retries[i].row.message_id)
+  }
+  return db.oldestStructuredMailboxWork(mailbox, [...settled])
 }

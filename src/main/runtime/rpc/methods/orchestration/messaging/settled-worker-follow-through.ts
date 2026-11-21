@@ -42,15 +42,32 @@ export function followThroughWorkerReport(
 
 /** Mail the worker never read before it reported is not lost: it goes to the worker's newer Dispatch,
  *  or becomes one, as a send after the report would. Its report marked it, so a restart resumes this. */
-function continueUnreadWorkerMail(
+async function continueUnreadWorkerMail(
   runtime: OrcaRuntimeService,
   db: OrchestrationDb,
   dispatchId: string,
   recoveryThrough?: number
 ): Promise<void> {
-  return continueUnreadMail(runtime, db, dispatchId, recoveryThrough).catch((error: unknown) => {
+  const report = (error: unknown) =>
     console.warn('[orchestration] unread worker mail was not continued', dispatchId, error)
-  })
+  try {
+    const first = db.getUnreadMessages(`dispatch:${dispatchId}`, [...FOLLOW_UP_MESSAGE_TYPES])[0]
+    const later = first && recoveryThrough !== undefined && first.sequence > recoveryThrough
+    const continued = continueUnreadMail(
+      runtime,
+      db,
+      dispatchId,
+      first,
+      later ? undefined : recoveryThrough
+    )
+    if (later) {
+      void continued.catch(report)
+      return
+    }
+    await continued
+  } catch (error) {
+    report(error)
+  }
 }
 
 // The Task only points at the mail, which the follow-up's mailbox holds however much there is.
@@ -69,9 +86,9 @@ async function continueUnreadMail(
   runtime: OrcaRuntimeService,
   db: OrchestrationDb,
   dispatchId: string,
+  first: ReturnType<OrchestrationDb['getUnreadMessages']>[number] | undefined,
   recoveryThrough: number | undefined
 ): Promise<void> {
-  const first = db.getUnreadMessages(`dispatch:${dispatchId}`, [...FOLLOW_UP_MESSAGE_TYPES])[0]
   if (!first) {
     clearFollowUpMail(db, dispatchId)
     return
@@ -274,30 +291,23 @@ export function settledDispatchId(receipt: unknown): string | undefined {
     : undefined
 }
 
-/** After the open returns, so continuing a worker can use the database it is opening. */
-export function continueRestoredWorkerMailSoon(
-  runtime: OrcaRuntimeService,
-  db: OrchestrationDb,
-  isCurrent: () => boolean
-): Promise<void> {
-  const recoveryThrough = db.getMessageSequenceWatermark()
-  return delay(0, undefined, { ref: false }).then(() =>
-    isCurrent() ? continueAllUnreadWorkerMail(runtime, db, recoveryThrough) : undefined
-  )
-}
-
-/** At startup: continue what a restart interrupted between a report and its follow-up. */
+/** Continue what a restart interrupted. The live runtime defers starts until after DB open. */
 export async function continueAllUnreadWorkerMail(
   runtime: OrcaRuntimeService,
   db: OrchestrationDb,
-  recoveryThrough?: number
+  isCurrent?: () => boolean
 ): Promise<void> {
   try {
+    // Snapshot before yielding: a new report drives its own follow-up.
+    const through = db.getMessageSequenceWatermark()
     const ids = listDispatchesWithFollowUpMail(db)
-    if (ids.length !== 0) {
-      const through = recoveryThrough ?? db.getMessageSequenceWatermark()
-      await Promise.all(ids.map((id) => continueUnreadWorkerMail(runtime, db, id, through)))
+    if (isCurrent) {
+      await delay(0, undefined, { ref: false })
+      if (!isCurrent()) {
+        return
+      }
     }
+    await Promise.all(ids.map((id) => continueUnreadWorkerMail(runtime, db, id, through)))
   } catch (error) {
     // A database closed before this ran (shutdown, tests) has nothing left to continue.
     console.warn('[orchestration] restored worker mail was not scanned', error)

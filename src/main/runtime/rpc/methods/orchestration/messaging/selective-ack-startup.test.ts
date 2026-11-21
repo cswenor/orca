@@ -478,6 +478,33 @@ it('joins the PTY notice created by restored worker recovery', async () => {
   }
 })
 
+it('leaves worker follow-up markers created after startup to ordinary delivery', async () => {
+  const { db, runtime } = harness.setup(false)
+  const run = createBoundRun(db, 'Report arrives after startup was scheduled')
+  const task = db.createTask({ runId: run.id, spec: 'Worker that reported after startup' })
+  const worker = createRootDispatch(db, task.id, 'term_worker')
+  db.db
+    .prepare(
+      `INSERT INTO worker_dispatches (dispatch_id, runtime_epoch, state, stage, agent_terminal_handle)
+       VALUES (?, 'previous-epoch', 'starting', 'authority_attached', 'term_worker')`
+    )
+    .run(worker.id)
+  const recovery = continueAllUnreadWorkerMail(runtime, db, () => true)
+  const later = db.insertMessage({
+    from: 'term_coord',
+    to: `dispatch:${worker.id}`,
+    runId: run.id,
+    subject: 'First mail for a separately marked worker'
+  })
+  markUnreadFollowUpMail(db, worker.id)
+  await recovery
+  expect(db.getUnreadMessages(`run:${run.id}`)).toEqual([])
+  expect(db.getMessageById(later.id)).toMatchObject({
+    to_handle: `dispatch:${worker.id}`,
+    read: 0
+  })
+})
+
 it.each(['headless', 'window', 'reload', 'explicit'])('marks %s mail', async (mode) => {
   const db = new OrchestrationDb(':memory:')
   try {
