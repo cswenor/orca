@@ -206,6 +206,36 @@ it('refuses direct acknowledgment from a completed legacy worker handle without 
   expect(db.getMessageById(mail.id)?.read).toBe(0)
 })
 
+it('refuses a retained legacy handle acting on a different current Run', async () => {
+  const { db, dispatcher, runtime } = createHarness()
+  vi.spyOn(runtime, 'getTerminalPaneKey').mockReturnValue(WORKER_PANE)
+  const current = db.createRun({
+    objective: 'current Run',
+    coordinatorHandle: WORKER_HANDLE,
+    coordinatorPaneKey: WORKER_PANE
+  })
+  const mail = db.insertMessage({
+    from: 'sender',
+    to: `run:${current.id}`,
+    runId: current.id,
+    subject: 'current Run mail'
+  })
+  await expect(
+    dispatcher.dispatch(
+      request(
+        'orchestration.ackMessages',
+        { terminal: WORKER_HANDLE, run: current.id, ackIds: [mail.id] },
+        undefined,
+        'refused_legacy_on_current_run'
+      )
+    )
+  ).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'legacy_read_only', data: { effectsApplied: false } }
+  })
+  expect(db.getMessageById(mail.id)?.read).toBe(0)
+})
+
 describe('legacy compatibility after explicit takeover', () => {
   it('refuses selective IDs without returning or consuming a legacy page', async () => {
     const h = createHarness()

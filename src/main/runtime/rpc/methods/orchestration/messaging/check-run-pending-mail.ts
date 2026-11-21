@@ -68,15 +68,16 @@ export async function checkRunPendingMail(args: {
   } = args
   const generation = run.consumer_generation
   const address = `run:${run.id}`
-  // Drain pre-bind mail through its original Dispatch owner, never by changing its Run.
-  const residual = !params.run
-    ? resolveCheckDispatch(db, handle, paneKey, Boolean(params.ackIds), true)
-    : undefined
   const caller = orchestrationCallerIdentity(runtime, {
     handle,
     paneKey,
     session: args.callerSession
   })
+  // Drain pre-bind mail through its original Dispatch owner, never by changing its Run.
+  const residualCheck = { sessionId: caller.orcaSessionId, residual: true }
+  const residual = !params.run
+    ? resolveCheckDispatch(db, handle, paneKey, params.ackIds ? residualCheck : undefined)
+    : undefined
   const residualAck =
     params.ack &&
     residual &&
@@ -114,7 +115,14 @@ export async function checkRunPendingMail(args: {
                 caller: handle,
                 assignee: residual.assignee_handle,
                 revalidate: () => {
-                  const current = resolveCheckDispatch(db, handle, paneKey, true, true)
+                  const current = resolveCheckDispatch(db, handle, paneKey, {
+                    sessionId: orchestrationCallerIdentity(runtime, {
+                      handle,
+                      paneKey,
+                      session: args.callerSession
+                    }).orcaSessionId,
+                    residual: true
+                  })
                   if (
                     current?.id !== residual.id ||
                     current.consumer_generation !== residual.consumer_generation ||

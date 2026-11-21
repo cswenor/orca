@@ -7,17 +7,17 @@ import { structuredWorkerSession } from '../../../orchestration/terminal-authori
 import { sessionIdFromStructuredWorkerIncarnation } from '../../../orchestration/terminal-authority/structured-sessions/structured-worker-incarnation'
 import { parsePaneKey } from '../../../../../shared/workspace-layout/stable-pane-id'
 import { agentSessionOwnerObservationIsLive } from '../../../../../shared/agent-session/lifecycle/leases/agent-session-lease-adjudication'
-import { assertSelectableDirectMailbox } from '../../methods/orchestration/messaging/check-direct'
+import {
+  assertDirectMailboxConsumer,
+  assertSelectableDirectMailbox
+} from '../../methods/orchestration/messaging/check-direct'
 import type { OrcaRuntimeService } from '../../../orca-runtime'
 import { OrchestrationError } from '../../../orchestration/orchestration-error'
 import type { RpcRequest } from '../../core'
 import { callerHoldsResidualDispatch } from '../../methods/orchestration/messaging/check-run-pending-mail'
 import { resolveCheckDispatch } from '../../methods/orchestration/messaging/dispatch-mailbox-fence'
 import { isSelectedDispatchMessage } from '../../methods/orchestration/messaging/selective-message-ack'
-import {
-  assertDirectMailboxConsumer,
-  resolveMailboxCheckScope
-} from '../../methods/orchestration/messaging/check-methods'
+import { resolveMailboxCheckScope } from '../../methods/orchestration/messaging/check-methods'
 import { resolveRunScope } from '../../methods/orchestration/runs/run-scope'
 import { legacyReadOnlyError } from '../compatibility/orchestration-legacy-process-identity'
 import type { DurableMutationInvocation } from './orchestration-mutation-executor'
@@ -212,7 +212,12 @@ function selectiveAckReceiptBinding(
   ) {
     throw legacyReadOnlyError()
   }
-  const dispatch = !run ? resolveCheckDispatch(db, handle, paneKey, true, true) : undefined
+  const dispatch = !run
+    ? resolveCheckDispatch(db, handle, paneKey, {
+        sessionId: scope.caller.orcaSessionId,
+        residual: true
+      })
+    : undefined
   let residual: [string, number] | undefined
   if (
     dispatch &&

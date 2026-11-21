@@ -1,6 +1,27 @@
 import { parsePaneKey } from '../../../../../shared/workspace-layout/stable-pane-id'
 import { OrchestrationError } from '../../../orchestration/orchestration-error'
 import type { OrchestrationDb } from '../../../orchestration/db/orchestration-db'
+import { LEGACY_CONTRACT_VERSION } from '../../../orchestration/db/contract-constants'
+
+/** Selective receipts cannot authorize any mailbox through a retained legacy handle. */
+export function assertSelectableMailboxHandle(db: OrchestrationDb, handle: string): void {
+  const adoption = db.getLegacyAdoption()
+  if (!adoption) {
+    return
+  }
+  if (
+    db.db
+      .prepare(
+        `SELECT 1 FROM dispatch_contexts
+         WHERE run_id = ? AND contract_version = ? AND assignee_handle = ?
+         LIMIT 1`
+      )
+      .get(adoption.adopted_run_id, LEGACY_CONTRACT_VERSION, handle)
+  ) {
+    throw legacyReadOnlyError()
+  }
+  assertNotRetainedLegacyHandle(db, adoption.adopted_run_id, handle)
+}
 
 /** Reject the retained handle, not a different current caller using the historical pane. */
 export function assertNotRetainedLegacyHandle(

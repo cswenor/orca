@@ -10,11 +10,29 @@ import { staleDelivery } from '../../../../orchestration/db/messages/role-mailbo
 import { ORCHESTRATION_LEGACY_RUN_ID } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
 import type { MailboxCheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 import { runOwnsDirectMessageSql } from '../../../../orchestration/db/runs/run-coordinator-mail-routing'
-import { LEGACY_CONTRACT_VERSION } from '../../../../orchestration/db/contract-constants'
-import {
-  assertNotRetainedLegacyHandle,
-  legacyReadOnlyError
-} from '../../../orchestration/compatibility/orchestration-legacy-process-identity'
+import type { OrchestrationPartyIdentity } from '../../../../../../shared/orchestration/mailbox/orchestration-party-identity'
+
+export function assertDirectMailboxConsumer(
+  db: OrchestrationDb,
+  scope: {
+    unboundOnly: boolean
+    caller: OrchestrationPartyIdentity
+    handle: string
+    paneKey: string | undefined
+  }
+): void {
+  const { unboundOnly, caller, handle, paneKey } = scope
+  if (
+    (!unboundOnly && db.getCurrentRunForCoordinator(caller)) ||
+    db.getActiveDispatchForIdentity(handle, paneKey) ||
+    (paneKey && db.findActiveRemoteAttachmentForPane(paneKey))
+  ) {
+    throw new OrchestrationError(
+      'consumer_fenced',
+      'This direct mailbox became owned by a Run or Dispatch while checking mail.'
+    )
+  }
+}
 
 function assertCurrentDirectMail(hasLegacyMail: boolean): void {
   if (hasLegacyMail) {
@@ -32,21 +50,6 @@ export function assertSelectableDirectMailbox(
   handle: string,
   unboundOnly: boolean
 ): void {
-  const adoption = db.getLegacyAdoption()
-  if (adoption) {
-    assertNotRetainedLegacyHandle(db, adoption.adopted_run_id, handle)
-    if (
-      db.db
-        .prepare(
-          `SELECT 1 FROM dispatch_contexts
-           WHERE run_id = ? AND contract_version = ? AND assignee_handle = ?
-           LIMIT 1`
-        )
-        .get(adoption.adopted_run_id, LEGACY_CONTRACT_VERSION, handle)
-    ) {
-      throw legacyReadOnlyError()
-    }
-  }
   if (!unboundOnly) {
     assertCurrentDirectMail(
       Boolean(

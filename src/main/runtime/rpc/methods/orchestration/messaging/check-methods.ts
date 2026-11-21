@@ -7,12 +7,11 @@ import {
 } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 import type { RpcContext } from '../../../core'
 import type { OrcaRuntimeService } from '../../../../orca-runtime'
-import type { OrchestrationPartyIdentity } from '../../../../../../shared/orchestration/mailbox/orchestration-party-identity'
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import { parseMessageTypes } from '../routing'
 import { checkRunMailbox } from './check-run'
 import { checkWorkerMailbox } from './check-worker'
-import { checkDirectMailbox } from './check-direct'
+import { assertDirectMailboxConsumer, checkDirectMailbox } from './check-direct'
 import { withOwnDirectMail } from './check-own-direct-mail'
 import { CheckMailReconciliation } from './check-mail-reconciliation'
 import {
@@ -38,6 +37,7 @@ import {
   isSupersededDispatch,
   resolveCheckDispatch
 } from './dispatch-mailbox-fence'
+import { assertSelectableMailboxHandle } from '../../../orchestration/compatibility/orchestration-legacy-process-identity'
 
 /** The ordinary consuming check and selective receipt replay authorize the same mailbox. */
 export function resolveMailboxCheckScope(
@@ -57,6 +57,9 @@ export function resolveMailboxCheckScope(
       { effectsApplied: false }
     )
   }
+  if (params.ackIds) {
+    assertSelectableMailboxHandle(db, handle)
+  }
   const livePane = runtime.getTerminalPaneKey(handle)
   const caller = orchestrationCallerIdentity(runtime, {
     handle,
@@ -74,7 +77,12 @@ export function resolveMailboxCheckScope(
     return { ...callerScope, kind: 'run' as const, boundRun }
   }
 
-  const activeDispatch = resolveCheckDispatch(db, handle, paneKey, Boolean(params.ackIds))
+  const activeDispatch = resolveCheckDispatch(
+    db,
+    handle,
+    paneKey,
+    params.ackIds ? { sessionId: caller.orcaSessionId } : undefined
+  )
   // Reading another pane's Dispatch mail is wrong in every mode, so peek is fenced too.
   if (activeDispatch && !callerHoldsDispatchPane(activeDispatch, paneKey)) {
     throw dispatchFenced()
@@ -120,28 +128,6 @@ export function resolveMailboxCheckScope(
   return { ...callerScope, kind: 'direct' as const, unboundOnly }
 }
 
-export function assertDirectMailboxConsumer(
-  db: OrchestrationDb,
-  scope: {
-    unboundOnly: boolean
-    caller: OrchestrationPartyIdentity
-    handle: string
-    paneKey: string | undefined
-  }
-): void {
-  const { unboundOnly, caller, handle, paneKey } = scope
-  if (
-    (!unboundOnly && db.getCurrentRunForCoordinator(caller)) ||
-    db.getActiveDispatchForIdentity(handle, paneKey) ||
-    (paneKey && db.findActiveRemoteAttachmentForPane(paneKey))
-  ) {
-    throw new OrchestrationError(
-      'consumer_fenced',
-      'This direct mailbox became owned by a Run or Dispatch while checking mail.'
-    )
-  }
-}
-
 async function checkMailbox(
   params: MailboxCheckParams,
   {
@@ -180,6 +166,9 @@ async function checkMailbox(
   const process = runtime.getTerminalProcessIncarnation(handle)
   const revalidateCaller = () => {
     reader?.revalidateAckLease?.()
+    if (params.ackIds) {
+      assertSelectableMailboxHandle(db, handle)
+    }
     if (
       runtime.getTerminalPaneKey(handle) !== livePane ||
       runtime.getTerminalProcessIncarnation(handle) !== process

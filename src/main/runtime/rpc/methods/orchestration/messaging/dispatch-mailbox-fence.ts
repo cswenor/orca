@@ -16,8 +16,7 @@ export function resolveCheckDispatch(
   db: OrchestrationDb,
   handle: string,
   paneKey: string | undefined,
-  selective: boolean,
-  residual = false
+  selective?: { sessionId: string | null; residual?: boolean }
 ): DispatchContextRow | undefined {
   const dispatch = db.getActiveDispatchForIdentity(handle, paneKey)
   if (!selective || !dispatch) {
@@ -28,7 +27,7 @@ export function resolveCheckDispatch(
     db.getPeerRun(dispatch.run_id) ||
     db.getFederatedDispatch(dispatch.id)
   ) {
-    if (residual) {
+    if (selective.residual) {
       return undefined
     }
     throw new OrchestrationError(
@@ -40,12 +39,12 @@ export function resolveCheckDispatch(
   // A handle-only match still owns its recorded pane; check it for conflicting custody.
   const knownPane = paneKey ?? dispatch.assignee_pane_key ?? undefined
   if (
-    !hasCompetingActiveDispatch(db, dispatch, handle, knownPane) &&
+    !hasCompetingActiveDispatch(db, dispatch, handle, knownPane, selective.sessionId) &&
     !(knownPane && db.findActiveRemoteAttachmentForPane(knownPane))
   ) {
     return dispatch
   }
-  if (residual) {
+  if (selective.residual) {
     return undefined
   }
   throw new OrchestrationError(

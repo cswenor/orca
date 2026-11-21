@@ -4,6 +4,7 @@ import {
   resolveCheckDispatch
 } from './dispatch-mailbox-fence'
 import type { WorkerMailboxCheckInput } from './check-worker-mailbox-input'
+import { orchestrationCallerIdentity } from '../runs/run-scope'
 
 export function acknowledgeSelectedWorkerMail(args: WorkerMailboxCheckInput, ids: string[]) {
   const { activeDispatch, db, handle, paneKey } = args
@@ -21,7 +22,13 @@ export function acknowledgeSelectedWorkerMail(args: WorkerMailboxCheckInput, ids
     revalidateConsumer: () => {
       args.revalidateCaller?.()
       args.revalidateConsumer?.()
-      const current = resolveCheckDispatch(db, handle, paneKey, true)
+      const current = resolveCheckDispatch(db, handle, paneKey, {
+        sessionId: orchestrationCallerIdentity(args.runtime, {
+          handle,
+          paneKey,
+          session: args.reader
+        }).orcaSessionId
+      })
       if (
         current?.id !== id ||
         current.consumer_generation !== generation ||
