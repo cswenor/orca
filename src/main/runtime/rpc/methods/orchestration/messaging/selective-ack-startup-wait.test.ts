@@ -7,13 +7,15 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ORCHESTRATION_CONTRACT_VERSION } from '../../../../../../shared/orchestration/orchestration-runtime-capabilities'
 import { ORCHESTRATION_MAIL_RECONCILIATION_TIMEOUT_MS } from '../../../../../../shared/orchestration/orchestration-timing-budgets'
+import { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
+import { OrcaRuntimeService } from '../../../../orca-runtime'
 import type { RpcResponse } from '../../../core'
 import { RpcDispatcher } from '../../../dispatcher'
 import { readRuntimeMetadata } from '../../../server/runtime-metadata'
 import { OrcaRuntimeRpcServer } from '../../../server/runtime-rpc'
 import type { RpcMessageContext } from '../../../transport'
 import { ORCHESTRATION_METHODS } from '../orchestration'
-import { createOrchestrationRpcHarness } from '../rpc-test-harness'
+import { COORDINATOR_PANE_KEY, createOrchestrationRpcHarness } from '../rpc-test-harness'
 
 const harness = createOrchestrationRpcHarness()
 afterEach(() => harness.cleanup())
@@ -84,6 +86,62 @@ it('replays a completed receipt without joining unrelated mailbox recovery', asy
     recovery.resolve()
     await replay
     vi.useRealTimers()
+  }
+})
+
+it('a cold retry leaves no receipt while shared startup can fail independently', async () => {
+  const profile = await mkdtemp(join(tmpdir(), 'orca-cold-ack-'))
+  const databasePath = join(profile, 'orchestration.sqlite')
+  const seed = new OrchestrationDb(databasePath)
+  const message = seed.insertMessage({ from: 'term_sender', to: 'term_coord', subject: 'selected' })
+  seed.close()
+
+  const routing = Promise.withResolvers<void>()
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const runtime = new (class extends OrcaRuntimeService {
+    protected override orchestrationDbPath() {
+      return databasePath
+    }
+
+    protected override scheduleRestoredMessageRepoints() {
+      return routing.promise
+    }
+  })(null)
+  vi.spyOn(runtime, 'getTerminalPaneKey').mockReturnValue(COORDINATOR_PANE_KEY)
+  vi.spyOn(runtime, 'getLiveTerminalPaneKey').mockReturnValue(COORDINATOR_PANE_KEY)
+  vi.spyOn(runtime, 'getTerminalProcessIncarnation').mockReturnValue('runtime_test:term_coord:1')
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+
+  try {
+    await expect(
+      dispatcher.dispatch({
+        id: 'rpc_cold_retry',
+        authToken: 'test',
+        method: 'orchestration.ackMessages',
+        params: { terminal: 'term_coord', ackIds: [message.id], replayOnly: true },
+        orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+        orchestrationRequestId: 'cold_retry'
+      })
+    ).resolves.toMatchObject({ ok: false, error: { code: 'operation_unknown' } })
+
+    const failure = new Error('restored mailbox routing failed during a later page')
+    routing.reject(failure)
+    await vi.waitFor(() =>
+      expect(warning).toHaveBeenCalledWith(
+        '[orchestration] restored mailbox routing failed',
+        failure
+      )
+    )
+    const db = runtime.getOrchestrationDb()
+    expect(db.getMessageById(message.id)?.read).toBe(0)
+    expect(
+      db.getMutationReceipt(db.readLocalMutationCallerFingerprint()!, 'cold_retry')
+    ).toBeUndefined()
+  } finally {
+    routing.resolve()
+    runtime.getOrchestrationDb().close()
+    warning.mockRestore()
+    await rm(profile, { recursive: true, force: true })
   }
 })
 

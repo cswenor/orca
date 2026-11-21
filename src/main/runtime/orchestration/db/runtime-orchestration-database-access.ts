@@ -55,11 +55,15 @@ export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWith
       getWorkerTerminalAutoReleaseScheduler(this).rearm()
       const workers = this.continueRestoredWorkerMail(db)
       this.restoredWorkerMail = workers
-      void workers.finally(() => {
-        if (this.restoredWorkerMail === workers) {
-          this.restoredWorkerMail = undefined
-        }
-      })
+      void workers
+        .finally(() => {
+          if (this.restoredWorkerMail === workers) {
+            this.restoredWorkerMail = undefined
+          }
+        })
+        .catch((error) => {
+          console.warn('[orchestration] restored worker mail recovery failed', error)
+        })
       // No terminal prompt's hold survives a restart; its card must not stay answerable.
       closeOrphanedTerminalApprovals(this._orchestrationDb)
     }
@@ -78,11 +82,15 @@ export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWith
   private trackRestoredMailboxRouting(): void {
     const routing = this.scheduleRestoredMessageRepoints()
     this.restoredMailboxRouting = routing
-    void routing?.finally(() => {
-      if (this.restoredMailboxRouting === routing) {
-        this.restoredMailboxRouting = undefined
-      }
-    })
+    void routing
+      ?.finally(() => {
+        if (this.restoredMailboxRouting === routing) {
+          this.restoredMailboxRouting = undefined
+        }
+      })
+      .catch((error) => {
+        console.warn('[orchestration] restored mailbox routing failed', error)
+      })
   }
 
   /** The database, opened only if it already exists: a profile without one has no mail to redrive. */
