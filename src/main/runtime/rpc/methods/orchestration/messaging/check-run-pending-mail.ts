@@ -10,7 +10,11 @@ import { checkWorkerMailbox } from './check-worker'
 import { acknowledgedOnlyReceipt, handsOverBatch } from './mailbox-message-receipt'
 import type { CheckMailReconciliation } from './check-mail-reconciliation'
 import { currentDispatchAssigneeRun } from './recipient-routing'
-import { callerHoldsDispatchPane, dispatchFenced } from './dispatch-mailbox-fence'
+import {
+  callerHoldsDispatchPane,
+  dispatchFenced,
+  resolveCheckDispatch
+} from './dispatch-mailbox-fence'
 import { orchestrationCallerIdentity } from '../runs/run-scope'
 import type {
   OrchestrationEntryCaller,
@@ -65,7 +69,9 @@ export async function checkRunPendingMail(args: {
   const generation = run.consumer_generation
   const address = `run:${run.id}`
   // Drain pre-bind mail through its original Dispatch owner, never by changing its Run.
-  const residual = !params.run ? db.getActiveDispatchForIdentity(handle, paneKey) : undefined
+  const residual = !params.run
+    ? resolveCheckDispatch(db, handle, paneKey, Boolean(params.ackIds), true)
+    : undefined
   const caller = orchestrationCallerIdentity(runtime, {
     handle,
     paneKey,
@@ -93,6 +99,11 @@ export async function checkRunPendingMail(args: {
         ids: params.ackIds,
         direct: false,
         mailboxIdentity: { runId: run.id },
+        routeSource: {
+          caller: handle,
+          assignee: run.coordinator_handle,
+          excludeDispatchOwned: true
+        },
         recordReceipt: recordMutationReceipt,
         revalidateConsumer,
         residual:
@@ -101,7 +112,7 @@ export async function checkRunPendingMail(args: {
                 mailbox: `dispatch:${residual.id}`,
                 runId: residual.run_id,
                 revalidate: () => {
-                  const current = db.getActiveDispatchForIdentity(handle, paneKey)
+                  const current = resolveCheckDispatch(db, handle, paneKey, true, true)
                   if (
                     current?.id !== residual.id ||
                     current.consumer_generation !== residual.consumer_generation ||

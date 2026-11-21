@@ -106,6 +106,52 @@ it('keeps a bound Run selection separate from explicit unbound direct mail', asy
   })
 })
 
+it('marks a selected Run-addressed terminal row without routing other mail', async () => {
+  const { db, ctx, activeRunId } = harness.setup()
+  const terminal = 'term_coord'
+  const seed = () =>
+    db.insertMessage({
+      from: 'term_sender',
+      to: `run:${activeRunId}`,
+      runId: activeRunId,
+      subject: 'Run status'
+    })
+  const selected = seed()
+  const remaining = seed()
+  db.db
+    .prepare('UPDATE messages SET to_handle = ? WHERE id IN (?, ?)')
+    .run(terminal, selected.id, remaining.id)
+  const params = { terminal, run: activeRunId, ackIds: [selected.id] }
+  await expect(harness.call('orchestration.ackMessages', params, ctx)).resolves.toMatchObject({
+    markedIds: [selected.id]
+  })
+  expect(db.getMessageById(selected.id)).toMatchObject({ read: 1, to_handle: terminal })
+  expect(db.getMessageById(remaining.id)).toMatchObject({ read: 0, to_handle: terminal })
+})
+
+it('refuses a selected read message still in chat custody without marking the rest', async () => {
+  const { db, ctx } = harness.setup(false)
+  const terminal = 'term_coord'
+  const seed = () => db.insertMessage({ from: 'term_sender', to: terminal, subject: 'status' })
+  const held = seed()
+  const remaining = seed()
+  db.reserveStructuredMailSend({
+    mailbox_handle: terminal,
+    message_id: held.id,
+    session_id: 'session-owned-mail',
+    operation_id: 'held-after-read',
+    minted_at_ms: Date.now()
+  })
+  db.db.prepare('UPDATE messages SET read = 1 WHERE id = ?').run(held.id)
+  await expect(
+    harness.call('orchestration.ackMessages', { terminal, ackIds: [held.id, remaining.id] }, ctx)
+  ).rejects.toMatchObject({
+    code: 'invalid_argument',
+    message: expect.stringContaining('held by a structured chat')
+  })
+  expect(db.getMessageById(remaining.id)?.read).toBe(0)
+})
+
 it.each([{ run: '' }, { run: ' ' }, { run: null }, { run: 17 }, { run: {} }, { run: [] }])(
   'refuses malformed explicit Run scope $run before marking any mail',
   async (scope) => {
@@ -221,9 +267,18 @@ it('uses the ordinary Dispatch pane fence without adding a launch check', async 
     })
   }
   expect(db.getMessageById(direct.id)?.read).toBe(0)
+  const scoped = db.insertMessage({
+    from: 'term_coord',
+    to: terminal,
+    runId: dispatch.run_id,
+    subject: 'Dispatch status still addressed to the worker'
+  })
+  expect(db.getMessageById(scoped.id)?.to_handle).toBe(terminal)
   await expect(
-    harness.call('orchestration.ackMessages', { terminal, ackIds: [selected.id] }, ctx)
-  ).resolves.toMatchObject({ dispatchId: dispatch.id, markedIds: [selected.id] })
+    harness.call('orchestration.ackMessages', { terminal, ackIds: [selected.id, scoped.id] }, ctx)
+  ).resolves.toMatchObject({ dispatchId: dispatch.id, markedIds: [selected.id, scoped.id] })
+  expect(db.getMessageById(scoped.id)).toMatchObject({ to_handle: terminal, read: 1 })
+  expect(db.getMessageById(direct.id)?.read).toBe(0)
 })
 
 it('shares the ordinary legacy fence for the implicit direct mailbox', async () => {

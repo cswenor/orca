@@ -1,6 +1,9 @@
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import { getMessagesByIds } from '../../../../orchestration/db/messages/messages-by-id'
-import { runOwnsDirectMessageSql } from '../../../../orchestration/db/runs/run-coordinator-mail-routing'
+import {
+  activeDispatchOwnsAddressSql,
+  runOwnsDirectMessageSql
+} from '../../../../orchestration/db/runs/run-coordinator-mail-routing'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
 import { ORCHESTRATION_LEGACY_RUN_ID } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
 
@@ -12,9 +15,15 @@ export function acknowledgeSelectedMessages(args: {
   runId?: string
   recordReceipt?: (receipt: unknown) => void
   mailboxIdentity?: { runId: string; dispatchId?: string }
+  routeSource?: {
+    caller: string
+    assignee: string | null
+    excludeDispatchOwned?: boolean
+  }
   residual?: { mailbox: string; runId: string; revalidate: () => void }
 }) {
   const { db, mailbox, residual } = args
+  const { routeSource } = args
   const ids = [...new Set(args.ids)]
   const isRunOwned = args.direct
     ? db.db.prepare(
@@ -22,6 +31,14 @@ export function acknowledgeSelectedMessages(args: {
       )
     : undefined
   const directIdsJson = args.direct ? JSON.stringify(ids) : undefined
+  const ownedByDispatch = routeSource?.excludeDispatchOwned
+    ? db.db.prepare(
+        `SELECT 1 FROM messages WHERE id = ? AND ${activeDispatchOwnsAddressSql(
+          'messages.run_id',
+          'messages.to_handle'
+        )}`
+      )
+    : undefined
   const validateSelection = () => {
     const rows = getMessagesByIds(db, ids)
     const messages = ids.map((id) => {
@@ -32,7 +49,14 @@ export function acknowledgeSelectedMessages(args: {
           : (args.mailboxIdentity?.runId ?? args.runId)
       if (
         !message ||
-        (message.to_handle !== mailbox && message.to_handle !== residual?.mailbox) ||
+        (message.to_handle !== mailbox &&
+          message.to_handle !== residual?.mailbox &&
+          !(
+            routeSource &&
+            (message.to_handle === routeSource.caller ||
+              message.to_handle === routeSource.assignee) &&
+            !ownedByDispatch?.get(message.id)
+          )) ||
         (runId !== undefined && message.run_id !== runId)
       ) {
         throw new OrchestrationError(
@@ -72,15 +96,15 @@ export function acknowledgeSelectedMessages(args: {
     }
     return messages
   }
-  const messages = validateSelection().filter((message) => message.read === 0)
-  const markedIds = messages.map((message) => message.id)
-  if (db.getStructuredMailSendsForMessages(markedIds).length) {
+  const messages = validateSelection()
+  if (db.getStructuredMailSendsForMessages(ids).length) {
     throw new OrchestrationError(
       'invalid_argument',
       'Selected mail is held by a structured chat. Use a normal check for that mail. No messages were acknowledged.',
       { effectsApplied: false }
     )
   }
+  const markedIds = messages.filter((message) => message.read === 0).map((message) => message.id)
   if (markedIds.length) {
     db.db
       .prepare('UPDATE messages SET read = 1 WHERE id IN (SELECT value FROM json_each(?))')

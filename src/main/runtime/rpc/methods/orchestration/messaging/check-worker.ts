@@ -10,7 +10,12 @@ import {
   withReplyFollowUps
 } from './mailbox-message-receipt'
 import { routeAllMailboxPages, createDirectMailSnapshotRouter } from './mailbox-page-routing'
-import { asDispatchFence, callerHoldsDispatchPane, dispatchFenced } from './dispatch-mailbox-fence'
+import {
+  asDispatchFence,
+  callerHoldsDispatchPane,
+  dispatchFenced,
+  resolveCheckDispatch
+} from './dispatch-mailbox-fence'
 import { interruptedAcknowledgedCheck } from '../routing'
 import type { MessageWake } from '../../../../orchestration/mailbox/runtime-message-waiters'
 import { currentDispatchAssigneeRun } from './recipient-routing'
@@ -53,7 +58,7 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
       : db.getRemoteDispatchAttachment(workerMailbox.dispatchId)?.consumer_generation
   const holdsWorkerMailbox = () => {
     if (activeDispatch) {
-      const current = db.getActiveDispatchForIdentity(handle, paneKey)
+      const current = resolveCheckDispatch(db, handle, paneKey, Boolean(params.ackIds))
       if (current?.id !== activeDispatch.id) {
         return false
       }
@@ -85,6 +90,9 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
       ids: params.ackIds,
       direct: false,
       mailboxIdentity,
+      routeSource: activeDispatch
+        ? { caller: handle, assignee: activeDispatch.assignee_handle }
+        : undefined,
       recordReceipt: args.recordMutationReceipt,
       revalidateConsumer: revalidateWorkerConsumer
     })

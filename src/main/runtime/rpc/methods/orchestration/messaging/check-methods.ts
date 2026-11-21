@@ -35,7 +35,8 @@ import { orchestrationCallerIdentity } from '../runs/run-scope'
 import {
   callerHoldsDispatchPane,
   dispatchFenced,
-  isSupersededDispatch
+  isSupersededDispatch,
+  resolveCheckDispatch
 } from './dispatch-mailbox-fence'
 import { LEGACY_CONTRACT_VERSION } from '../../../../orchestration/db/contract-constants'
 
@@ -74,7 +75,7 @@ export function resolveMailboxCheckScope(
     return { ...callerScope, kind: 'run' as const, boundRun }
   }
 
-  const activeDispatch = db.getActiveDispatchForIdentity(handle, paneKey)
+  const activeDispatch = resolveCheckDispatch(db, handle, paneKey, Boolean(params.ackIds))
   // Reading another pane's Dispatch mail is wrong in every mode, so peek is fenced too.
   if (activeDispatch && !callerHoldsDispatchPane(activeDispatch, paneKey)) {
     throw dispatchFenced()

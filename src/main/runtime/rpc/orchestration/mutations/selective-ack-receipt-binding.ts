@@ -12,6 +12,7 @@ import type { OrcaRuntimeService } from '../../../orca-runtime'
 import { OrchestrationError } from '../../../orchestration/orchestration-error'
 import type { RpcRequest } from '../../core'
 import { callerHoldsResidualDispatch } from '../../methods/orchestration/messaging/check-run-pending-mail'
+import { resolveCheckDispatch } from '../../methods/orchestration/messaging/dispatch-mailbox-fence'
 import {
   assertDirectMailboxConsumer,
   resolveMailboxCheckScope
@@ -207,7 +208,7 @@ function selectiveAckReceiptBinding(
   ) {
     throw legacyReadOnlyError()
   }
-  const dispatch = !run ? db.getActiveDispatchForIdentity(handle, paneKey) : undefined
+  const dispatch = !run ? resolveCheckDispatch(db, handle, paneKey, true, true) : undefined
   let residual: [string, number] | undefined
   if (
     dispatch &&

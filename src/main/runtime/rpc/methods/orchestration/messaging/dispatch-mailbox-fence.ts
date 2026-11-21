@@ -1,4 +1,5 @@
 import type { DispatchContextRow } from '../../../../orchestration/db/orchestration-records'
+import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
 import { isEquivalentPaneKey } from '../../../../orchestration/db/pane-key-match'
 
@@ -7,6 +8,31 @@ export const DISPATCH_FENCED_MESSAGE =
 
 export function dispatchFenced(): OrchestrationError {
   return new OrchestrationError('consumer_fenced', DISPATCH_FENCED_MESSAGE)
+}
+
+export function resolveCheckDispatch(
+  db: OrchestrationDb,
+  handle: string,
+  paneKey: string | undefined,
+  selective: boolean,
+  residual = false
+): DispatchContextRow | undefined {
+  const dispatch = db.getActiveDispatchForIdentity(handle, paneKey)
+  if (!selective || !dispatch) {
+    return dispatch
+  }
+  const candidates = db.getActiveDispatchMailboxOwners(handle, paneKey)
+  if (candidates.length === 1 && candidates[0]?.id === dispatch.id) {
+    return dispatch
+  }
+  if (residual) {
+    return undefined
+  }
+  throw new OrchestrationError(
+    'consumer_fenced',
+    'Selective acknowledgment requires an unambiguous Dispatch owner.',
+    { effectsApplied: false }
+  )
 }
 
 /** Delivery fencing is generic; a worker needs to hear that it lost the Dispatch, not the Run. */
