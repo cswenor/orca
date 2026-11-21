@@ -136,7 +136,7 @@ function evidence(
 function request(
   method: string,
   params: unknown,
-  proof: OrchestrationCompatibilityEvidence,
+  proof: OrchestrationCompatibilityEvidence | undefined,
   invocationId: string
 ): RpcRequest {
   return {

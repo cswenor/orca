@@ -90,3 +90,32 @@ it('rejects a peer Run row even in a direct mailbox', async () => {
   expect(db.getMessageById(local.id)?.read).toBe(0)
   expect(db.getMessageById(foreign.id)?.read).toBe(0)
 })
+
+it('selects peer mail consumable in a local Run without taking unselected local mail', async () => {
+  const { db, ctx, activeRunId } = harness.setup()
+  const terminal = 'term_coord'
+  const to = `run:${activeRunId}`
+  const local = db.insertMessage({
+    from: 'term_sender',
+    to,
+    runId: activeRunId,
+    subject: 'local status'
+  })
+  const imported = db.insertPeerMailMessage({
+    conversationId: 'conv_local_mail',
+    peerFingerprint: 'test-peer',
+    remoteParty: null,
+    message: {
+      id: 'msg_imported_status',
+      from: 'peer-worker',
+      to,
+      runId: activeRunId,
+      subject: 'imported status'
+    }
+  }).message!
+  await expect(
+    harness.call('orchestration.ackMessages', { terminal, ackIds: [imported.id] }, ctx)
+  ).resolves.toMatchObject({ markedIds: [imported.id] })
+  expect(db.getMessageById(local.id)?.read).toBe(0)
+  expect(db.getMessageById(imported.id)?.read).toBe(1)
+})
