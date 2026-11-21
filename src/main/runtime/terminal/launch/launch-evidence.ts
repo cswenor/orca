@@ -108,12 +108,7 @@ export function recordReattachedLaunch(
   note: DaemonLaunchNote | null | undefined
 ): LaunchEvidence | null {
   const current = pty.launchEvidence
-  if (
-    current &&
-    current.kind !== 'unknown' &&
-    current.incarnationId === (incarnationId ?? null) &&
-    !(current.kind === 'gone' && current.daemonNoteAbsent && note)
-  ) {
+  if (current && current.kind !== 'unknown' && current.incarnationId === (incarnationId ?? null)) {
     return null
   }
   if (note === null && incarnationId) {

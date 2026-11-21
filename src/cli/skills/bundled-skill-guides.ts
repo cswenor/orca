@@ -4817,12 +4817,13 @@ const ORCHESTRATION_MESSAGING_AND_GATES_REFERENCE_MARKDOWN = [
   "Peer-Orca federation callers cannot selectively acknowledge mail without a",
   "local mailbox lease; paired clients addressing a live execution terminal are",
   "not subject to that limitation.",
-  "On the execution host, use selective acknowledgment from inside a token-launched",
-  "agent pane. From outside that pane, use an ordinary check instead.",
+  "On the execution host, a token-launched agent must use selective acknowledgment",
+  "from its own live pane.",
   "If Orca cannot verify a restored pane, use an ordinary check or a new pane.",
   "`request-show` reports selective request status only; to recover its outcome,",
   "run `check --ack-ids` with the same selection and `--retry-request` as the",
-  "original caller.",
+  "original caller. A refused retry did not mark mail on that attempt; its error",
+  "does not tell you whether the original request completed.",
   "",
 ].join('\n')
 

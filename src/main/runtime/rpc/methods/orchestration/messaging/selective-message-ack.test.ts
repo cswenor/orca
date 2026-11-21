@@ -414,12 +414,8 @@ it('requires current launch proof for local selective calls to a token-launched 
       orchestrationCompatibilityEvidence: { ...evidence, launchToken }
     })
   ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
-  const fencedRetry = await dispatcher.dispatch(request)
-  expect(fencedRetry).toMatchObject({
-    ok: false,
-    error: { code: 'consumer_fenced', message: fenced.error.message }
-  })
-  expect(fencedRetry).not.toHaveProperty('error.data.effectsApplied')
+  await expect(dispatcher.dispatch(request)).resolves.toMatchObject(fenced)
+  expect(db.getMessageById(selected.id)?.read).toBe(1)
 
   const remote = db.insertMessage({ from: 'sender', to: handle, subject: 'paired selective' })
   vi.mocked(runtime.getSelectiveAckPtyLaunchToken).mockReturnValue(undefined)

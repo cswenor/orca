@@ -81,7 +81,7 @@ describe('OrcaRuntimeService', () => {
     ])
   })
 
-  it('restores a retained coordinator handle after a late controller inventory', async () => {
+  it.each([null, 'retained-launch'])('restores a coordinator with note %s', async (token) => {
     const paneKey = makePaneKey('host-tab', HEADLESS_LEAF_ID)
     const incarnationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
     const session = makeWorkspaceSessionWithHeadlessTerminal({
@@ -146,11 +146,20 @@ describe('OrcaRuntimeService', () => {
       leafId: HEADLESS_LEAF_ID,
       incarnationId
     })
+    vi.spyOn(runtime, 'readLaunchedAgentForeground').mockResolvedValue('agent')
     runtime.registerPty('persisted-pty', TEST_WORKTREE_ID, null, {
       tabId: 'host-tab',
       leafId: HEADLESS_LEAF_ID,
       incarnationId,
-      reattach: { launchNote: null }
+      providerReattachLaunchIdentity: { incarnationId, launchAgent: 'codex' },
+      reattach: {
+        launchNote: token
+          ? {
+              launchToken: token,
+              launchConfig: { agentCommand: 'codex', agentArgs: '', agentEnv: {} }
+            }
+          : null
+      }
     })
     const syntheticHandle = runtime.getAgentStatusTerminalHandleForPaneKey(paneKey)
     expect(syntheticHandle).toMatch(/^term_/)
@@ -177,26 +186,14 @@ describe('OrcaRuntimeService', () => {
         paired: false,
         evidence: { terminalHandle: controllerHandle, paneKey, launchToken }
       })
-    expect(() => ack()).toThrow('cannot verify this restored pane')
-    expect(ack(RESTORED_AUTHORITY_TOKEN)).toMatchObject({
-      pty: { id: 'persisted-pty', launchTokenHash: RESTORED_AUTHORITY_TOKEN_HASH }
-    })
-
-    const daemonLaunchToken = 'daemon-retained-launch'
-    vi.spyOn(runtime, 'readLaunchedAgentForeground').mockResolvedValue('agent')
-    runtime.registerPty('persisted-pty', TEST_WORKTREE_ID, null, {
-      tabId: 'host-tab',
-      leafId: HEADLESS_LEAF_ID,
-      incarnationId,
-      providerReattachLaunchIdentity: { incarnationId, launchAgent: 'codex' },
-      reattach: {
-        launchNote: {
-          launchToken: daemonLaunchToken,
-          launchConfig: { agentCommand: 'codex', agentArgs: '', agentEnv: {} }
-        }
-      }
-    })
-    await vi.waitFor(() => expect(ack(daemonLaunchToken)).toHaveProperty('pty.id', 'persisted-pty'))
-    expect(() => ack(RESTORED_AUTHORITY_TOKEN)).toThrow('current agent pane launch token')
+    if (token) {
+      await vi.waitFor(() => expect(ack(token)).toHaveProperty('pty.id', 'persisted-pty'))
+      expect(() => ack(RESTORED_AUTHORITY_TOKEN)).toThrow('current agent pane launch token')
+    } else {
+      expect(() => ack()).toThrow('cannot verify this restored pane')
+      expect(ack(RESTORED_AUTHORITY_TOKEN)).toMatchObject({
+        pty: { id: 'persisted-pty', launchTokenHash: RESTORED_AUTHORITY_TOKEN_HASH }
+      })
+    }
   })
 })

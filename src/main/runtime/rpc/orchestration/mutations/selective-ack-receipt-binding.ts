@@ -38,25 +38,16 @@ export async function runSelectiveAckMutation(
   }
   const readBinding = () =>
     hashCanonical(selectiveAckReceiptBinding(runtime, request, params, caller, paired))
-  const db = runtime.getOrchestrationDb()
-  const fingerprint = callerFingerprint ?? db.readLocalMutationCallerFingerprint()
-  const existing = fingerprint ? db.getMutationReceipt(fingerprint, requestId) : undefined
-  let binding: string
-  try {
-    binding = readBinding()
-  } catch (error) {
-    if (existing && error instanceof OrchestrationError) {
-      // This invocation applied nothing, but the earlier request may already have committed.
-      throw new OrchestrationError(error.code, error.message)
-    }
-    throw error
-  }
+  const binding = readBinding()
   const { method } = request
   const payloadHash = hashCanonical({
     method,
     params: replayStableCallerParams(runtime, params, caller, method),
     binding
   })
+  const db = runtime.getOrchestrationDb()
+  const fingerprint = callerFingerprint ?? db.readLocalMutationCallerFingerprint()
+  const existing = fingerprint ? db.getMutationReceipt(fingerprint, requestId) : undefined
   if (existing) {
     if (existing.method !== method || existing.payload_hash !== payloadHash) {
       throw new OrchestrationError(
