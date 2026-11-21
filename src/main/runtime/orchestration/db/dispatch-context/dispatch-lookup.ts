@@ -30,6 +30,26 @@ const ASSIGNEE_SQL = {
   latest: assigneeLookups('')
 }
 
+/** Unlike routing precedence, a destructive selection must not hide another matching owner. */
+export function hasCompetingActiveDispatch(
+  db: OrchestrationDb,
+  dispatchId: string,
+  handle: string,
+  paneKey: string | undefined
+): boolean {
+  const leafId = paneKey ? parsePaneKey(paneKey)?.leafId : undefined
+  return (
+    db.db
+      .prepare(
+        `SELECT 1 FROM dispatch_contexts
+         WHERE status IN ('pending', 'dispatched') AND id <> ?
+           AND (assignee_handle = ? OR assignee_pane_key = ? OR (${BY_PANE_SUFFIX}))
+         LIMIT 1`
+      )
+      .get(dispatchId, handle, paneKey ?? null, leafId ?? null) !== undefined
+  )
+}
+
 export function hasRecordedStructuredWorkerSession(
   this: OrchestrationDbConnection,
   session: string,

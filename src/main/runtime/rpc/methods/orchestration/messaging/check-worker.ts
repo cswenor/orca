@@ -56,34 +56,6 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
     activeDispatch
       ? db.getDispatchContextById(workerMailbox.dispatchId)?.consumer_generation
       : db.getRemoteDispatchAttachment(workerMailbox.dispatchId)?.consumer_generation
-  const holdsWorkerMailbox = () => {
-    if (activeDispatch) {
-      const current = resolveCheckDispatch(db, handle, paneKey, Boolean(params.ackIds))
-      if (current?.id !== activeDispatch.id) {
-        return false
-      }
-      if (!callerHoldsDispatchPane(current, paneKey)) {
-        throw dispatchFenced()
-      }
-      return true
-    }
-    return (
-      paneKey !== undefined &&
-      db.findActiveRemoteAttachmentForPane(paneKey)?.dispatch_id === workerMailbox.dispatchId &&
-      db.isRemoteAttachmentProcessCurrent({
-        dispatchId: workerMailbox.dispatchId,
-        paneKey,
-        processIncarnation: runtime.getTerminalProcessIncarnation(handle)
-      })
-    )
-  }
-  const revalidateWorkerConsumer = () => {
-    args.revalidateCaller?.()
-    args.revalidateConsumer?.()
-    if (readCurrentGeneration() !== workerMailbox.generation || !holdsWorkerMailbox()) {
-      throw dispatchFenced()
-    }
-  }
   if (params.ackIds) {
     return args.reconciliation.acknowledgeSelected({
       mailbox: address,
@@ -94,13 +66,43 @@ export async function checkWorkerMailbox(args: WorkerMailboxCheckInput) {
         ? { caller: handle, assignee: activeDispatch.assignee_handle }
         : undefined,
       recordReceipt: args.recordMutationReceipt,
-      revalidateConsumer: revalidateWorkerConsumer
+      revalidateConsumer: () => {
+        args.revalidateCaller?.()
+        args.revalidateConsumer?.()
+        const current = resolveCheckDispatch(db, handle, paneKey, true)
+        if (
+          current?.id !== workerMailbox.dispatchId ||
+          current.consumer_generation !== workerMailbox.generation ||
+          !callerHoldsDispatchPane(current, paneKey)
+        ) {
+          throw dispatchFenced()
+        }
+      }
     })
   }
   const routeDirectSnapshot = createDirectMailSnapshotRouter(db, signal)
   const revalidateWorkerMailbox = async (): Promise<void> => {
-    if (holdsWorkerMailbox()) {
-      return
+    if (activeDispatch) {
+      const current = db.getActiveDispatchForIdentity(handle, paneKey)
+      if (current?.id === activeDispatch.id) {
+        // Re-attachment during awaits can retain the id while changing the pane.
+        if (callerHoldsDispatchPane(current, paneKey)) {
+          return
+        }
+        throw dispatchFenced()
+      }
+    } else if (remoteAttachment && paneKey) {
+      const current = db.findActiveRemoteAttachmentForPane(paneKey)
+      if (
+        current?.dispatch_id === remoteAttachment.dispatch_id &&
+        db.isRemoteAttachmentProcessCurrent({
+          dispatchId: current.dispatch_id,
+          paneKey,
+          processIncarnation: runtime.getTerminalProcessIncarnation(handle)
+        })
+      ) {
+        return
+      }
     }
     const latestDispatch = db.getDispatchContextById(workerMailbox.dispatchId)
     const owningRunId = latestDispatch?.run_id ?? activeDispatch?.run_id ?? workerMailbox.runId

@@ -1,5 +1,7 @@
 import type { DispatchContextRow } from '../../../../orchestration/db/orchestration-records'
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
+import { hasCompetingActiveDispatch } from '../../../../orchestration/db/dispatch-context/dispatch-lookup'
+import { LEGACY_CONTRACT_VERSION } from '../../../../orchestration/db/contract-constants'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
 import { isEquivalentPaneKey } from '../../../../orchestration/db/pane-key-match'
 
@@ -21,8 +23,21 @@ export function resolveCheckDispatch(
   if (!selective || !dispatch) {
     return dispatch
   }
-  const candidates = db.getActiveDispatchMailboxOwners(handle, paneKey)
-  if (candidates.length === 1 && candidates[0]?.id === dispatch.id) {
+  if (
+    dispatch.contract_version === LEGACY_CONTRACT_VERSION ||
+    db.getPeerRun(dispatch.run_id) ||
+    db.getFederatedDispatch(dispatch.id)
+  ) {
+    if (residual) {
+      return undefined
+    }
+    throw new OrchestrationError(
+      'legacy_read_only',
+      'Legacy and federated Dispatch mailboxes do not support selective acknowledgment.',
+      { effectsApplied: false }
+    )
+  }
+  if (!hasCompetingActiveDispatch(db, dispatch.id, handle, paneKey)) {
     return dispatch
   }
   if (residual) {

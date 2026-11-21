@@ -26,12 +26,12 @@ Every ID must exist in the caller's current mailbox (direct, bound Run or
 Dispatch); an unknown, foreign or legacy ID rejects the entire selection.
 An implicitly bound child Run can also acknowledge pre-bind Dispatch mail while
 it remains that Dispatch's current consumer and no Run delivery is outstanding.
-A bound Run selection never includes the caller's own direct mail. To select
-only unbound direct mail, specify `--run run_unbound` where an ordinary check
-can consume that direct mailbox.
-If any selected ID is a lifecycle report (`worker_done` or `heartbeat`), or any
-selected unread message is held by a structured chat, the entire selection is
-refused. Use a normal check for that mail.
+A bound Run selection accepts its own Run mail even if it still has a terminal
+address. It never includes unrelated direct mail. Use `--run run_unbound` to
+select only unbound direct mail where an ordinary check can consume that mailbox.
+If any selected ID is a lifecycle report (`worker_done` or `heartbeat`), or is
+still held by a structured chat, the entire selection is refused. Use a normal
+check for that mail.
 The CLI supplies the required request ID. `--retry-request` is read-only: it
 replays an existing receipt only for the original process or concrete chat lease
 and mailbox generation. If it cannot replay, inspect the mailbox before
@@ -44,8 +44,8 @@ Do not combine `--ack-ids` with other read, acknowledgment, formatting or wait
 options. Both the CLI and the execution host need selective-ack support; older
 hosts and the legacy SSH bridge are refused before consumption.
 Selective acknowledgment uses the same mailbox authorization as a normal
-consuming `check`. Peer-Orca federation cannot bind a receipt on the execution
-host and is refused.
+consuming `check`. Peer-Orca federation and legacy federated Dispatch
+attachments cannot bind a receipt safely and are refused.
 `request-show` reports selective request status only; to recover its outcome,
 run `check --ack-ids` with the same selection and `--retry-request` as the
 original caller. A refused retry did not mark mail on that attempt; its error

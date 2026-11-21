@@ -38,7 +38,6 @@ import {
   isSupersededDispatch,
   resolveCheckDispatch
 } from './dispatch-mailbox-fence'
-import { LEGACY_CONTRACT_VERSION } from '../../../../orchestration/db/contract-constants'
 
 /** The ordinary consuming check and selective receipt replay authorize the same mailbox. */
 export function resolveMailboxCheckScope(
@@ -82,8 +81,7 @@ export function resolveMailboxCheckScope(
   }
   const remoteAttachment =
     !activeDispatch && paneKey ? db.findActiveRemoteAttachmentForPane(paneKey) : undefined
-  const legacyMailbox = activeDispatch?.contract_version === LEGACY_CONTRACT_VERSION
-  if (params.ackIds && (legacyMailbox || (remoteAttachment && !unboundOnly))) {
+  if (params.ackIds && remoteAttachment && !unboundOnly) {
     throw new OrchestrationError(
       'legacy_read_only',
       'Legacy mailboxes do not support selective acknowledgment.',

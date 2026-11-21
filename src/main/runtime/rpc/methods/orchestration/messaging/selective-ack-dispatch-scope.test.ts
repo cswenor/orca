@@ -1,0 +1,60 @@
+import { afterEach, expect, it, vi } from 'vitest'
+import { createRootDispatch } from '../../../../orchestration/db/root-dispatch-test-fixture'
+import { createOrchestrationRpcHarness } from '../rpc-test-harness'
+
+const harness = createOrchestrationRpcHarness()
+afterEach(() => harness.cleanup())
+
+it('does not hide a conflicting stable pane owner behind an exact pane match', async () => {
+  const { db, runtime, ctx } = harness.setup()
+  const leaf = '33333333-3333-4333-9333-333333333333'
+  const terminal = 'term_reminted'
+  vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(`tab_current:${leaf}`)
+  const seed = (suffix: string, paneKey: string) => {
+    const task = db.createTask({ spec: `task ${suffix}` })
+    const dispatch = createRootDispatch(db, task.id, `term_${suffix}`, paneKey)
+    return db.insertMessage({
+      from: 'term_coord',
+      to: `dispatch:${dispatch.id}`,
+      runId: dispatch.run_id,
+      subject: `mail ${suffix}`
+    })
+  }
+  const other = seed('first', `tab_first:${leaf}`)
+  const newest = seed('second', 'tab_second:44444444-4444-4444-8444-444444444444')
+  // Model conflicting restored records, which current Dispatch creation already prevents.
+  db.db
+    .prepare('UPDATE dispatch_contexts SET assignee_pane_key = ? WHERE assignee_handle = ?')
+    .run(`tab_current:${leaf}`, 'term_second')
+  await expect(
+    harness.call('orchestration.ackMessages', { terminal, ackIds: [newest.id] }, ctx)
+  ).rejects.toMatchObject({
+    code: 'consumer_fenced',
+    message: expect.stringContaining('unambiguous Dispatch')
+  })
+  expect(db.getMessageById(other.id)?.read).toBe(0)
+  expect(db.getMessageById(newest.id)?.read).toBe(0)
+})
+
+it('refuses selective ack for a local worker whose Dispatch belongs to a peer Run', async () => {
+  const { db, runtime, ctx } = harness.setup(false)
+  const terminal = 'term_worker'
+  const pane = 'tab_worker:33333333-3333-4333-9333-333333333333'
+  vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(pane)
+  const peer = db.admitPeerRun({
+    peerFingerprint: 'test-peer',
+    peerRun: { conversationId: 'conv_test', runId: 'run_home', label: 'test home' }
+  })
+  const task = db.createTask({ runId: peer.run_id, spec: 'peer worker' })
+  const dispatch = createRootDispatch(db, task.id, terminal, pane)
+  const selected = db.insertMessage({
+    from: 'term_coord',
+    to: `dispatch:${dispatch.id}`,
+    runId: peer.run_id,
+    subject: 'peer worker status'
+  })
+  await expect(
+    harness.call('orchestration.ackMessages', { terminal, ackIds: [selected.id] }, ctx)
+  ).rejects.toMatchObject({ code: 'legacy_read_only', data: { effectsApplied: false } })
+  expect(db.getMessageById(selected.id)?.read).toBe(0)
+})
