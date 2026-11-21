@@ -462,7 +462,7 @@ it('requires current launch proof for local selective calls to a token-launched 
 it('accepts matching host evidence for a confirmed tokenless pane and rejects stale evidence', async () => {
   const { db, runtime } = harness.setup(false)
   const handle = 'term_coord'
-  const host = { kind: 'wsl' as const, hostId: 'wsl_host', distro: 'Ubuntu' }
+  const host = { kind: 'wsl', hostId: 'local', distro: 'Ubuntu' } as const
   const authority = runtime.getOrchestrationDispatchAuthority(handle)!
   vi.mocked(runtime.getOrchestrationDispatchAuthority).mockReturnValue({
     ...authority,
