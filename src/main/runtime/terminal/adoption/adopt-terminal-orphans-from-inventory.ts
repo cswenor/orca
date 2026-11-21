@@ -29,7 +29,8 @@ export abstract class OrcaRuntimeWithAdoptTerminalOrphansFromInventory extends O
 
   protected abstract getPaneKeyForTerminalHandle(
     handle: string,
-    context?: TerminalIdentityReadContext
+    context?: TerminalIdentityReadContext,
+    readOnly?: boolean
   ): string | null
 
   abstract assertGraphReady(): void
