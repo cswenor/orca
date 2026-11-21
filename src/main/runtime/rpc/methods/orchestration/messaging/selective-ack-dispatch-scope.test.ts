@@ -58,3 +58,24 @@ it('refuses selective ack for a local worker whose Dispatch belongs to a peer Ru
   ).rejects.toMatchObject({ code: 'legacy_read_only', data: { effectsApplied: false } })
   expect(db.getMessageById(selected.id)?.read).toBe(0)
 })
+
+it('rejects a peer Run row even in a direct mailbox', async () => {
+  const { db, ctx } = harness.setup(false)
+  const terminal = 'term_coord'
+  const peer = db.admitPeerRun({
+    peerFingerprint: 'test-peer',
+    peerRun: { conversationId: 'conv_direct', runId: 'run_home', label: 'test home' }
+  })
+  const foreign = db.insertMessage({
+    from: 'term_worker',
+    to: terminal,
+    runId: peer.run_id,
+    subject: 'peer Run status'
+  })
+  const local = db.insertMessage({ from: 'term_sender', to: terminal, subject: 'local status' })
+  await expect(
+    harness.call('orchestration.ackMessages', { terminal, ackIds: [local.id, foreign.id] }, ctx)
+  ).rejects.toMatchObject({ code: 'legacy_read_only', data: { effectsApplied: false } })
+  expect(db.getMessageById(local.id)?.read).toBe(0)
+  expect(db.getMessageById(foreign.id)?.read).toBe(0)
+})

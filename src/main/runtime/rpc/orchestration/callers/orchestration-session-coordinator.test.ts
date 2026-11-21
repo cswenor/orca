@@ -195,6 +195,16 @@ describe('a structured worker that names itself by session id', () => {
     expect(initializeHost).not.toHaveBeenCalled()
     expect(resultOf(await h.dispatch(injected))).toMatchObject({ markedIds: [message.id] })
     expect(resultOf(await h.dispatch(injected))).toMatchObject({ mutation: { replayed: true } })
+    const missingInjected = orchestrationRequest(
+      'orchestration.ackMessages',
+      { ackIds: [message.id], replayOnly: true },
+      { sessionId: successor }
+    )
+    expect(await h.dispatch(missingInjected)).toMatchObject({
+      ok: false,
+      error: { code: 'operation_unknown', data: { effectsApplied: false } }
+    })
+    expect(initializeHost).not.toHaveBeenCalled()
     current.lease = { ...current.lease, runtimeFence: current.lease.runtimeFence + 1 }
     for (const request of [injected, declared, paneOnly]) {
       expect(await h.dispatch(request)).toMatchObject({

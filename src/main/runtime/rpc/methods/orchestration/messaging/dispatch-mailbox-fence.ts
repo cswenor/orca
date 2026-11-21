@@ -37,7 +37,10 @@ export function resolveCheckDispatch(
       { effectsApplied: false }
     )
   }
-  if (!hasCompetingActiveDispatch(db, dispatch.id, handle, paneKey)) {
+  if (
+    !hasCompetingActiveDispatch(db, dispatch.id, handle, paneKey) &&
+    !(paneKey && db.findActiveRemoteAttachmentForPane(paneKey))
+  ) {
     return dispatch
   }
   if (residual) {

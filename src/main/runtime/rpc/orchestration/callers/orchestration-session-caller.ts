@@ -124,9 +124,14 @@ export async function resolveOrchestrationSessionCaller(
       `This command ran in ${evidence.host.kind === 'ssh' ? 'an SSH' : 'a WSL'} environment, and an Orca session ID identifies a caller only on the host that runs that session.`
     )
   }
-  const { sessionId, record } = await readActingSessionRecord(runtime, claimed, request.method)
-  const db = runtime.getOrchestrationDb()
   const selectiveAck = isSelectiveAckRequest(request)
+  const { sessionId, record } = await readActingSessionRecord(
+    runtime,
+    claimed,
+    request.method,
+    !selectiveAck
+  )
+  const db = runtime.getOrchestrationDb()
   const store = selectiveAck ? getStructuredAgentSessionHost()?.deps.store : undefined
   const { runtimeFence, ownerProcess } = record.lease
   const spawnToken = ownerProcess?.spawnToken
@@ -170,7 +175,8 @@ export async function resolveOrchestrationSessionCaller(
 export async function readActingSessionRecord(
   runtime: Pick<OrcaRuntimeService, 'ensureStructuredAgentSessionHost'>,
   claimed: unknown,
-  method: string
+  method: string,
+  installHost = true
 ): Promise<{ sessionId: OrcaSessionId; record: AgentSessionRecord }> {
   if (typeof claimed !== 'string' || !isOrcaSessionId(claimed)) {
     throw new OrchestrationError(
@@ -179,7 +185,7 @@ export async function readActingSessionRecord(
       NO_EFFECTS
     )
   }
-  const record = await readSessionRecord(runtime, claimed)
+  const record = await readSessionRecord(runtime, claimed, installHost)
   assertSessionCanAct(claimed, record, method)
   return { sessionId: claimed, record }
 }
@@ -195,11 +201,12 @@ export async function readActingSessionWorkspaceKey(
 
 async function readSessionRecord(
   runtime: Pick<OrcaRuntimeService, 'ensureStructuredAgentSessionHost'>,
-  sessionId: string
+  sessionId: string,
+  installHost: boolean
 ): Promise<AgentSessionRecord> {
   let store: AgentSessionRecordStore | null
   try {
-    await runtime.ensureStructuredAgentSessionHost()
+    await (installHost ? runtime.ensureStructuredAgentSessionHost() : undefined)
     store = getStructuredAgentSessionHost()?.deps.store ?? null
   } catch {
     store = null

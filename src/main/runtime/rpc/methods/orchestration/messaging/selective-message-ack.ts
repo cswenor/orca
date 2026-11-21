@@ -82,11 +82,12 @@ export function acknowledgeSelectedMessages(args: {
       }
       if (
         message.delivery_contract !== 'current_delivery' ||
-        message.run_id === ORCHESTRATION_LEGACY_RUN_ID
+        message.run_id === ORCHESTRATION_LEGACY_RUN_ID ||
+        (message.run_id && db.getPeerRun(message.run_id))
       ) {
         throw new OrchestrationError(
           'legacy_read_only',
-          'Legacy orchestration messages are inspect-only. No messages were acknowledged.',
+          'Legacy and peer Run messages do not support selective acknowledgment.',
           { effectsApplied: false }
         )
       }
