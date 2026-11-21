@@ -8,7 +8,11 @@ import type { DaemonLaunchNote } from '../../../daemon/protocol/daemon-launch-no
  *  identity fences an async check; never persisted, so a main restart starts unknown. */
 export type LaunchEvidence =
   | { readonly kind: 'unknown' }
-  | { readonly kind: 'gone'; readonly incarnationId: PtyIncarnationId | null }
+  | {
+      readonly kind: 'gone'
+      readonly incarnationId: PtyIncarnationId | null
+      readonly daemonNoteAbsent?: true
+    }
   | {
       readonly kind: 'held'
       readonly incarnationId: PtyIncarnationId | null
@@ -96,20 +100,25 @@ export function retireReplacedLaunch(pty: PtyLaunchFacts, next: PtyIncarnationId
   }
 }
 
-/** A reattach to process `incarnationId` can't revive or replace what main proved about it. Else a
- *  retired note proves the launch gone; anything else is unknown, returned when a foreground check
- *  of the note may settle it. */
+/** A reattach can't override evidence main proved about the same process. An absent daemon note
+ *  clears the launch recipe but cannot distinguish a retired launch from a note never armed. */
 export function recordReattachedLaunch(
   pty: PtyLaunchFacts,
   incarnationId: PtyIncarnationId | undefined,
   note: DaemonLaunchNote | null | undefined
 ): LaunchEvidence | null {
   const current = pty.launchEvidence
-  if (current && current.kind !== 'unknown' && current.incarnationId === (incarnationId ?? null)) {
+  if (
+    current &&
+    current.kind !== 'unknown' &&
+    current.incarnationId === (incarnationId ?? null) &&
+    !(current.kind === 'gone' && current.daemonNoteAbsent && note)
+  ) {
     return null
   }
   if (note === null && incarnationId) {
-    retireLaunch(pty, incarnationId)
+    pty.launchEvidence = { kind: 'gone', incarnationId, daemonNoteAbsent: true }
+    pty.launchConfig = null
     return null
   }
   const pending: LaunchEvidence = { kind: 'unknown' }

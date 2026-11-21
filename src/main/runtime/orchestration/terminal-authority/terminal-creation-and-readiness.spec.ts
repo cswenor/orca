@@ -146,6 +146,12 @@ describe('OrcaRuntimeService', () => {
       leafId: HEADLESS_LEAF_ID,
       incarnationId
     })
+    runtime.registerPty('persisted-pty', TEST_WORKTREE_ID, null, {
+      tabId: 'host-tab',
+      leafId: HEADLESS_LEAF_ID,
+      incarnationId,
+      reattach: { launchNote: null }
+    })
     const syntheticHandle = runtime.getAgentStatusTerminalHandleForPaneKey(paneKey)
     expect(syntheticHandle).toMatch(/^term_/)
     expect(syntheticHandle).not.toBe(controllerHandle)

@@ -414,7 +414,12 @@ it('requires current launch proof for local selective calls to a token-launched 
       orchestrationCompatibilityEvidence: { ...evidence, launchToken }
     })
   ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
-  await expect(dispatcher.dispatch(request)).resolves.toMatchObject(fenced)
+  const fencedRetry = await dispatcher.dispatch(request)
+  expect(fencedRetry).toMatchObject({
+    ok: false,
+    error: { code: 'consumer_fenced', message: fenced.error.message }
+  })
+  expect(fencedRetry).not.toHaveProperty('error.data.effectsApplied')
 
   const remote = db.insertMessage({ from: 'sender', to: handle, subject: 'paired selective' })
   vi.mocked(runtime.getSelectiveAckPtyLaunchToken).mockReturnValue(undefined)
@@ -433,16 +438,59 @@ it('requires current launch proof for local selective calls to a token-launched 
     }
   })
   expect(db.getMessageById(remote.id)?.read).toBe(0)
+  const pairedRequest = { ...request, params: { ...request.params, ackIds: [remote.id] } }
+  const paired = {
+    pairedDeviceId: 'test-device',
+    authenticatedCallerFingerprint: 'test-fingerprint',
+    clientKind: 'runtime' as const
+  }
+  await expect(dispatcher.dispatch(pairedRequest, paired)).resolves.toMatchObject({
+    ok: true,
+    result: { markedIds: [remote.id] }
+  })
+  const authority = runtime.getOrchestrationDispatchAuthority(handle)!
+  vi.mocked(runtime.getOrchestrationDispatchAuthority).mockReturnValue({
+    ...authority,
+    launchTokenHash: 'different-target-launch'
+  })
+  await expect(dispatcher.dispatch(pairedRequest, paired)).resolves.toMatchObject({
+    ok: true,
+    result: { markedIds: [remote.id], mutation: { replayed: true } }
+  })
+})
+
+it('accepts matching host evidence for a confirmed tokenless pane and rejects stale evidence', async () => {
+  const { db, runtime } = harness.setup(false)
+  const handle = 'term_coord'
+  const host = { kind: 'wsl' as const, hostId: 'wsl_host', distro: 'Ubuntu' }
+  const authority = runtime.getOrchestrationDispatchAuthority(handle)!
+  vi.mocked(runtime.getOrchestrationDispatchAuthority).mockReturnValue({
+    ...authority,
+    hostScope: host
+  })
+  const selected = db.insertMessage({ from: 'sender', to: handle, subject: 'selective' })
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+  const request = {
+    id: 'rpc_selective_hosted_shell',
+    authToken: 'test',
+    method: 'orchestration.ackMessages',
+    params: { terminal: handle, ackIds: [selected.id] },
+    orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+    orchestrationRequestId: 'hosted-shell-selective'
+  }
+  const evidence = { terminalHandle: handle, paneKey: harness.coordinatorPaneKey, host }
+  for (const stale of [
+    { ...evidence, host: { ...host, distro: 'old-distro' } },
+    { ...evidence, launchToken: 'retired-launch' }
+  ]) {
+    await expect(
+      dispatcher.dispatch({ ...request, orchestrationCompatibilityEvidence: stale })
+    ).resolves.toMatchObject({ ok: false, error: { code: 'consumer_fenced' } })
+  }
+  expect(db.getMessageById(selected.id)?.read).toBe(0)
   await expect(
-    dispatcher.dispatch(
-      { ...request, params: { ...request.params, ackIds: [remote.id] } },
-      {
-        pairedDeviceId: 'test-device',
-        authenticatedCallerFingerprint: 'test-fingerprint',
-        clientKind: 'runtime'
-      }
-    )
-  ).resolves.toMatchObject({ ok: true, result: { markedIds: [remote.id] } })
+    dispatcher.dispatch({ ...request, orchestrationCompatibilityEvidence: evidence })
+  ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
 })
 
 it('rejects a relay-only SSH attachment as a selective mailbox caller', async () => {

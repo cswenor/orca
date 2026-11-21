@@ -51,14 +51,11 @@ export function assertSelectiveAckCaller(
       { effectsApplied: false }
     )
   }
-  let launchTokenHash = authority.launchTokenHash
-  if (origin) {
-    const { evidence, paired } = origin
-    const launchToken = paired ? null : runtime.getSelectiveAckPtyLaunchToken(authority.ptyId)
-    const launchKind =
-      launchToken === null ? 'gone' : launchToken === undefined ? 'unknown' : 'held'
-    const requiresLaunchProof = launchKind !== 'gone'
-    if (requiresLaunchProof || evidence?.launchToken || evidence?.host) {
+  let launchTokenHash: string | null = null
+  if (origin && !origin.paired) {
+    const { evidence } = origin
+    const launchToken = runtime.getSelectiveAckPtyLaunchToken(authority.ptyId)
+    if (launchToken !== null) {
       const proof = runtime.verifyOrchestrationCompatibilityCaller(evidence, {
         currentRuntimeLaunchSufficient: true,
         selectiveAck: true
@@ -69,12 +66,15 @@ export function assertSelectiveAckCaller(
         proof.paneKey !== authority.paneKey ||
         proof.processIncarnation !== process
       ) {
-        throw terminalEvidenceMismatch(launchKind)
+        throw terminalEvidenceMismatch(launchToken === undefined ? 'unknown' : 'held')
       }
       launchTokenHash = proof.launchTokenHash
     } else if (
-      (evidence?.terminalHandle || evidence?.paneKey) &&
-      (evidence.terminalHandle !== handle || evidence.paneKey !== authority.paneKey)
+      evidence?.launchToken ||
+      (evidence?.host &&
+        !runtime.orchestrationCompatibilityHostMatches(authority.hostScope, evidence.host)) ||
+      ((evidence?.terminalHandle || evidence?.paneKey) &&
+        (evidence.terminalHandle !== handle || evidence.paneKey !== authority.paneKey))
     ) {
       throw terminalEvidenceMismatch('gone')
     }
@@ -89,7 +89,7 @@ function terminalEvidenceMismatch(launchKind: 'gone' | 'held' | 'unknown'): Orch
       ? 'Selective acknowledgment cannot verify this restored pane. Use an ordinary check or open a new pane.'
       : launchKind === 'held'
         ? 'Selective acknowledgment requires the current agent pane launch token. Run it from that pane or use an ordinary check.'
-        : 'Terminal evidence does not match this mailbox caller.',
+        : 'Terminal evidence is stale or does not match this mailbox caller.',
     { effectsApplied: false }
   )
 }

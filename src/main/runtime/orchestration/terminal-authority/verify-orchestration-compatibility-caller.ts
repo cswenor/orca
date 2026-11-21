@@ -132,7 +132,11 @@ export abstract class OrcaRuntimeWithVerifyOrchestrationCompatibilityCaller exte
     }
     // Reattach re-proves daemon-held launch evidence against the incarnation and foreground agent.
     if (evidence && evidence.kind !== 'unknown' && evidence.incarnationId === pty.incarnationId) {
-      return evidence.kind === 'held' ? evidence.token : null
+      return evidence.kind === 'held'
+        ? evidence.token
+        : evidence.daemonNoteAbsent
+          ? undefined
+          : null
     }
     return undefined
   }
@@ -163,7 +167,7 @@ export abstract class OrcaRuntimeWithVerifyOrchestrationCompatibilityCaller exte
     })
   }
 
-  protected orchestrationCompatibilityHostMatches(
+  orchestrationCompatibilityHostMatches(
     hostScope: OrchestrationCompatibilityTerminalAuthority['hostScope'],
     host: OrchestrationCompatibilityHostStamp | undefined
   ): boolean {
