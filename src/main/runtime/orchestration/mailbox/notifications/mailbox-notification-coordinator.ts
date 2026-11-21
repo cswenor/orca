@@ -45,31 +45,51 @@ export class OrchestrationMailboxNotificationCoordinator<
     if (!waitForRedrives) {
       return undefined
     }
-    const pending: Promise<void>[] = []
-    if (terminal?.flight) {
-      pending.push(terminal.flight)
-    }
+    const direct = this.waitForTerminalRecovery(terminal)
     const structured = structuredPointerDelivery?.whenIdle(handle)
-    if (structured) {
-      pending.push(structured)
+    // A structured pass can give mail back to a PTY. Its redrive starts before the
+    // structured completion resolves, but the PTY flight won't exist when we start.
+    const handback = structured?.then(() =>
+      this.waitForTerminalRecovery(pointerDelivery.pendingRecovery(handle))
+    )
+    return direct && handback
+      ? Promise.all([direct, handback]).then(() => undefined)
+      : (direct ?? handback)
+  }
+
+  withdrawStaleChatMail(
+    mailboxes: Iterable<string> | undefined,
+    waitForRedrives: boolean
+  ): Promise<void> | undefined {
+    const { structuredPointerDelivery, getDb } = this.deps
+    if (!structuredPointerDelivery || !waitForRedrives) {
+      return structuredPointerDelivery?.withdrawStale(mailboxes)
     }
-    if (terminal?.routing) {
-      pending.push(this.waitForRoutingRedrives(terminal.routing))
-    }
-    return pending.length > 1 ? Promise.all(pending).then(() => undefined) : pending[0]
+    const targets = new Set(mailboxes ?? getDb()?.getStructuredMailSendMailboxes())
+    const cleanup = structuredPointerDelivery.withdrawStale(targets, true)
+    return cleanup ? this.waitForRoutingRedrives(cleanup.then(() => targets)) : undefined
   }
 
   waitForRoutingRedrives(completion: Promise<ReadonlySet<string>>): Promise<void> {
-    const { mailboxOwner, pointerDelivery, structuredPointerDelivery } = this.deps
-    return mailboxOwner.waitForRoutingRedrives(completion, {
+    return this.deps.mailboxOwner.waitForRoutingRedrives(completion, {
       whenIdle: (handle) => {
-        const terminal = pointerDelivery.whenRecoveryIdle(handle)
+        const { pointerDelivery, structuredPointerDelivery } = this.deps
         const structured = structuredPointerDelivery?.whenIdle(handle)
-        return terminal && structured
-          ? Promise.all([terminal, structured]).then(() => undefined)
-          : (terminal ?? structured)
+        const terminal = () => this.waitForTerminalRecovery(pointerDelivery.pendingRecovery(handle))
+        return structured ? structured.then(terminal) : terminal()
       }
     })
+  }
+
+  private waitForTerminalRecovery(
+    pending?: ReturnType<typeof this.deps.pointerDelivery.pendingRecovery>
+  ): Promise<void> | undefined {
+    const { routing, flight } = pending ?? {}
+    if (!routing) {
+      return flight
+    }
+    const routed = this.waitForRoutingRedrives(routing)
+    return flight ? Promise.all([routed, flight]).then(() => undefined) : routed
   }
 
   deliverForTerminal(terminal: OrchestrationMailboxTerminal): void {

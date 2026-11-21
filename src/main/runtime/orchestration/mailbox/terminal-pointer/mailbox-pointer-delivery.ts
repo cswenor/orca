@@ -51,19 +51,24 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
       if (!waitForRecovery) {
         return undefined
       }
-      return {
-        routing: this.deps.mailboxOwner.pendingDirectReconciliation(terminal.ptyId),
-        flight: this.whenPtyRecoveryIdle(terminal.ptyId)
-      }
+      return this.pendingPtyRecovery(terminal.ptyId)
     } catch {
       // Persisted mail remains available to explicit check or the terminal's next input edge.
       return undefined
     }
   }
 
-  whenRecoveryIdle(handle: string): Promise<void> | undefined {
+  pendingRecovery(handle: string): ReturnType<typeof this.pendingPtyRecovery> {
     const terminal = this.deps.deliveryTarget.resolveTerminal(handle)
-    return terminal ? this.whenPtyRecoveryIdle(terminal.ptyId) : undefined
+    return terminal ? this.pendingPtyRecovery(terminal.ptyId) : undefined
+  }
+
+  private pendingPtyRecovery(
+    ptyId: string
+  ): { routing?: Promise<ReadonlySet<string>>; flight?: Promise<void> } | undefined {
+    const routing = this.deps.mailboxOwner.pendingDirectReconciliation(ptyId)
+    const flight = this.whenPtyRecoveryIdle(ptyId)
+    return routing || flight ? { routing, flight } : undefined
   }
 
   private whenPtyRecoveryIdle(ptyId: string): Promise<void> | undefined {

@@ -212,10 +212,17 @@ it('waits for every PTY routing page before acknowledging direct-addressed Run m
   expect(db.getUnreadMessages(terminal.handle)).toEqual([])
 })
 
-it('waits for the restored PTY probe, pointer text, and Enter before marking mail', async () => {
+it.each([false, true])('settles a restored PTY pointer before ACK (chat: %s)', async (fromChat) => {
   vi.useFakeTimers()
   const db = new OrchestrationDb(':memory:')
   const probe = Promise.withResolvers<boolean>()
+  const withdrawn = {
+    epoch: '',
+    state: { kind: 'withdrawn' },
+    body: null,
+    withdrawal: 'system'
+  } as const
+  const handback = Promise.withResolvers<typeof withdrawn>()
   const text = Promise.withResolvers<typeof WRITE_ACCEPTED>()
   const enter = Promise.withResolvers<typeof WRITE_ACCEPTED>()
   try {
@@ -245,6 +252,21 @@ it('waits for the restored PTY probe, pointer text, and Enter before marking mai
       runId: run.id,
       subject: 'Read independently before the staged check is submitted'
     })
+    if (fromChat) {
+      const host = runtime['orchestrationStructuredMailboxPointerDelivery']['deps'].host
+      vi.spyOn(host, 'observeMail').mockReturnValue(handback.promise)
+      for (const message of [selected, alreadyRead]) {
+        expect(
+          db.reserveStructuredMailSend({
+            mailbox_handle: `run:${run.id}`,
+            message_id: message.id,
+            session_id: 'previous-chat',
+            operation_id: `send-${message.id}`,
+            minted_at_ms: Date.now()
+          })
+        ).toBe(true)
+      }
+    }
     runtime.setOrchestrationDb(db)
     const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
     const result = dispatcher.dispatch({
@@ -256,6 +278,11 @@ it('waits for the restored PTY probe, pointer text, and Enter before marking mai
       orchestrationRequestId: 'restored_pointer'
     })
     await vi.advanceTimersByTimeAsync(2_001)
+    expect(pointerCount(write)).toBe(0)
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+    handback.resolve(withdrawn)
+    await vi.advanceTimersByTimeAsync(25)
+    expect(db.getStructuredMailSends(`run:${run.id}`)).toEqual([])
     expect(pointerCount(write)).toBe(0)
     expect(db.getMessageById(selected.id)?.read).toBe(0)
     probe.resolve(true)
@@ -277,6 +304,7 @@ it('waits for the restored PTY probe, pointer text, and Enter before marking mai
     })
     expect(db.getMessageById(selected.id)).toMatchObject({ read: 1, pointer_enter_pending: 0 })
   } finally {
+    handback.resolve(withdrawn)
     probe.resolve(true)
     text.resolve(WRITE_ACCEPTED)
     enter.resolve(WRITE_ACCEPTED)
