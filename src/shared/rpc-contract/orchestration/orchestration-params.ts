@@ -73,7 +73,8 @@ export const AckMessagesParams = z.strictObject({
   terminal: AckScopeString,
   terminalPaneKey: AckScopeString,
   run: AckScopeString,
-  ackIds: z.array(z.string().trim().min(1)).min(1)
+  ackIds: z.array(z.string().trim().min(1)).min(1),
+  replayOnly: z.boolean().optional()
 })
 
 /** Internal arguments for the shared mailbox routing code, not a wire schema. */

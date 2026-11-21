@@ -212,6 +212,66 @@ describe('legacy compatibility after explicit takeover', () => {
     expect(h.db.getMessageById(unread.id)?.read).toBe(0)
   })
 
+  it('uses ordinary routing precedence for retained worker evidence', async () => {
+    const { db, dispatcher } = createHarness()
+    const mail = db.insertMessage({
+      from: 'sender',
+      to: CURRENT_COORDINATOR_HANDLE,
+      subject: 'current direct mail'
+    })
+    await expect(
+      dispatcher.dispatch(
+        request(
+          'orchestration.ackMessages',
+          { terminal: CURRENT_COORDINATOR_HANDLE, ackIds: [mail.id] },
+          evidence('worker'),
+          'retained-worker-ack'
+        )
+      )
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'legacy_read_only', data: { effectsApplied: false } }
+    })
+    expect(db.getMessageById(mail.id)?.read).toBe(0)
+  })
+
+  it('does not fence an explicit current Run that reuses a historical pane', async () => {
+    const h = createHarness()
+    await expect(
+      h.dispatcher.dispatch(
+        request(
+          'orchestration.runUse',
+          { id: h.adoptedRunId, from: COORDINATOR_HANDLE },
+          evidence('coordinator'),
+          'bind-old-coordinator'
+        )
+      )
+    ).resolves.toMatchObject({ ok: true })
+    vi.mocked(h.runtime.getTerminalPaneKey).mockReturnValue(COORDINATOR_PANE)
+    const terminal = CURRENT_COORDINATOR_HANDLE
+    const run = h.db.createRun({
+      objective: 'unrelated current Run',
+      coordinatorHandle: terminal,
+      coordinatorPaneKey: COORDINATOR_PANE
+    })
+    const mail = h.db.insertMessage({
+      from: 'sender',
+      to: `run:${run.id}`,
+      runId: run.id,
+      subject: 'current'
+    })
+    await expect(
+      h.dispatcher.dispatch(
+        request(
+          'orchestration.ackMessages',
+          { terminal, run: run.id, ackIds: [mail.id] },
+          { ...evidence('current-coordinator'), paneKey: COORDINATOR_PANE },
+          'current-Run-selection'
+        )
+      )
+    ).resolves.toMatchObject({ ok: true, result: { markedIds: [mail.id] } })
+  })
+
   it('keeps an active legacy worker usable across authenticated takeover', async () => {
     const harness = createHarness()
     await expect(

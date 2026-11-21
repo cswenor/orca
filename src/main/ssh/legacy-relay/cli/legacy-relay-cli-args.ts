@@ -2,7 +2,7 @@
  * Reads the argv an older relay forwards for one `orca` command run in its terminal.
  * COMPAT(legacy-relay-bridge): revisit 2027-01-15.
  */
-import { CLI_BOOLEAN_FLAGS } from '../../../../shared/cli/cli-argument-boundary'
+import { CLI_BOOLEAN_FLAGS, CLI_GLOBAL_FLAGS } from '../../../../shared/cli/cli-argument-boundary'
 import {
   isOrchestrationRetryRequestId,
   RETRY_REQUEST_ID_GUIDANCE
@@ -11,6 +11,7 @@ import {
 type LegacyRelayCliArgs = { command: string; flags: Map<string, string | boolean> }
 
 const LEGACY_CHECK_FLAGS = new Set([
+  ...CLI_GLOBAL_FLAGS,
   'terminal',
   'run',
   'ack',
@@ -23,8 +24,7 @@ const LEGACY_CHECK_FLAGS = new Set([
   'wait',
   'timeout-ms',
   'retry-request',
-  'full',
-  'json'
+  'full'
 ])
 
 export function parseLegacyRelayCliArgs(argv: readonly string[]): LegacyRelayCliArgs {

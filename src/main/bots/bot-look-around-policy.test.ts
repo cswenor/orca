@@ -142,6 +142,9 @@ describe('look-around connector verbs and orchestration', () => {
 
   it('lets a look list workers but not start one', () => {
     expect(lookAroundOrchestrationAllowed('orchestration.workerList')).toBe(true)
+    expect(lookAroundOrchestrationAllowed('orchestration.ackMessages')).toBe(
+      lookAroundOrchestrationAllowed('orchestration.check')
+    )
     expect(lookAroundOrchestrationAllowed('orchestration.workerStart')).toBe(false)
     expect(lookAroundOrchestrationAllowed('orchestration.send')).toBe(false)
   })

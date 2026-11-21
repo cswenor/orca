@@ -123,7 +123,7 @@ describe('orchestration.check on a re-attached Dispatch', () => {
     await expect(acknowledge()).resolves.toMatchObject({ markedIds: [message.id] })
   })
 
-  it('explicit unbound selection takes direct mail without touching the attached Dispatch', async () => {
+  it('fences explicit direct selection while the caller holds an active Dispatch', async () => {
     ;({ db, runtime, ctx } = h.setup(false))
     vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(PANE_A)
     const { id: runId } = db.createRun({
@@ -157,7 +157,8 @@ describe('orchestration.check on a re-attached Dispatch', () => {
         },
         ctx
       )
-    ).resolves.toMatchObject({ markedIds: [direct.id] })
+    ).rejects.toMatchObject({ code: 'consumer_fenced' })
+    expect(db.getMessageById(direct.id)?.read).toBe(0)
     expect(db.getMessageById(dispatchMail.id)?.read).toBe(0)
   })
 

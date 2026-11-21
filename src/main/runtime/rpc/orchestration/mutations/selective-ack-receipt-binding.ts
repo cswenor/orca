@@ -3,11 +3,18 @@ import {
   type OrchestrationEntryCaller
 } from '../../../orchestration/addressing/orchestration-caller-identity'
 import { getMessagesByIds } from '../../../orchestration/db/messages/messages-by-id'
+import { structuredWorkerSession } from '../../../orchestration/terminal-authority/structured-sessions/structured-worker-authority'
+import { sessionIdFromStructuredWorkerIncarnation } from '../../../orchestration/terminal-authority/structured-sessions/structured-worker-incarnation'
+import { parsePaneKey } from '../../../../../shared/workspace-layout/stable-pane-id'
+import { assertSelectableDirectMailbox } from '../../methods/orchestration/messaging/check-direct'
 import type { OrcaRuntimeService } from '../../../orca-runtime'
 import { OrchestrationError } from '../../../orchestration/orchestration-error'
 import type { RpcRequest } from '../../core'
 import { callerHoldsResidualDispatch } from '../../methods/orchestration/messaging/check-run-pending-mail'
-import { resolveMailboxCheckScope } from '../../methods/orchestration/messaging/check-methods'
+import {
+  assertDirectMailboxConsumer,
+  resolveMailboxCheckScope
+} from '../../methods/orchestration/messaging/check-methods'
 import { resolveRunScope } from '../../methods/orchestration/runs/run-scope'
 import type { DurableMutationInvocation } from './orchestration-mutation-executor'
 import {
@@ -32,21 +39,34 @@ export async function runSelectiveAckMutation(
       { effectsApplied: false }
     )
   }
-  const readBinding = () =>
-    hashCanonical(selectiveAckReceiptBinding(runtime, request, params, caller))
-  const binding = readBinding()
-  const { method } = request
-  const payloadHash = hashCanonical({
-    method,
-    params: replayStableCallerParams(runtime, params, caller, method),
-    binding
-  })
   const db = runtime.getOrchestrationDb()
   const fingerprint = callerFingerprint ?? db.readLocalMutationCallerFingerprint()
   if (fingerprint === undefined) {
     throw new Error('Local mutation caller identity was not initialized.')
   }
   const existing = db.getMutationReceipt(fingerprint, requestId)
+  if (
+    !existing &&
+    params &&
+    typeof params === 'object' &&
+    'replayOnly' in params &&
+    params.replayOnly === true
+  ) {
+    throw new OrchestrationError(
+      'operation_unknown',
+      `Selective acknowledgment ${requestId} has no stored receipt. Inspect the mailbox before issuing a fresh request.`,
+      { effectsApplied: false }
+    )
+  }
+  const readBinding = () => selectiveAckReceiptBinding(runtime, request, params, caller)
+  const target = readBinding()
+  const binding = hashCanonical(target)
+  const { method } = request
+  const payloadHash = hashCanonical({
+    method,
+    params: replayStableCallerParams(runtime, params, caller, method),
+    binding
+  })
   if (existing) {
     if (existing.method !== method || existing.payload_hash !== payloadHash) {
       throw new OrchestrationError(
@@ -60,11 +80,18 @@ export async function runSelectiveAckMutation(
         `Mutation ${requestId} has no completed receipt.`
       )
     }
+    if (!target.replayable) {
+      throw new OrchestrationError(
+        'operation_unknown',
+        `Selective acknowledgment ${requestId} has no verifiable original process or lease.`,
+        { effectsApplied: false }
+      )
+    }
     return attachMutationReceipt(JSON.parse(existing.receipt), requestId, true)
   }
   const result = await invoke({
     recordReceipt: (receipt) => {
-      if (readBinding() !== binding) {
+      if (hashCanonical(readBinding()) !== binding) {
         throw new OrchestrationError('consumer_fenced', 'The selective mailbox caller changed.', {
           effectsApplied: false
         })
@@ -117,9 +144,22 @@ function selectiveAckReceiptBinding(
   const { livePane, paneKey } = scope
   // This is the authorized consumer snapshot, not a second origin check.
   const process = runtime.getTerminalProcessIncarnation(handle)
-  const lease = sessionCallerOf(caller)?.revalidateAckLease?.()
-  const target = { process, lease, livePane, paneKey }
+  const structuredSessionId =
+    sessionIdFromStructuredWorkerIncarnation(process) ?? scope.caller.orcaSessionId
+  const lease =
+    sessionCallerOf(caller)?.revalidateAckLease?.() ??
+    (structuredSessionId ? currentWorkerLease(structuredSessionId) : undefined)
+  const replayable = lease !== undefined || (structuredSessionId === null && process !== null)
+  const target = {
+    process,
+    lease,
+    livePane: stablePane(livePane),
+    pane: stablePane(paneKey),
+    replayable
+  }
   if (scope.kind === 'direct') {
+    assertDirectMailboxConsumer(db, scope)
+    assertSelectableDirectMailbox(db, handle, scope.unboundOnly)
     return { ...target, direct: handle }
   }
   if (scope.kind === 'dispatch') {
@@ -145,6 +185,7 @@ function selectiveAckReceiptBinding(
   let residual: [string, number] | undefined
   if (
     dispatch &&
+    !db.hasOutstandingMailboxDelivery(`run:${currentRun.id}`) &&
     callerHoldsResidualDispatch(
       runtime,
       db,
@@ -163,4 +204,17 @@ function selectiveAckReceiptBinding(
     }
   }
   return { ...target, run: [currentRun.id, currentRun.consumer_generation], dispatch: residual }
+}
+
+function stablePane(pane: string | null | undefined) {
+  return pane ? (parsePaneKey(pane)?.leafId ?? pane) : null
+}
+
+function currentWorkerLease(sessionId: string): readonly [string, number] | undefined {
+  const session = structuredWorkerSession({ sessionId })
+  return session.kind === 'here' &&
+    session.record.ownerObservation.claimStatus === 'live' &&
+    session.record.ownerObservation.handoffStage === null
+    ? [session.sessionId, session.record.currentFence]
+    : undefined
 }

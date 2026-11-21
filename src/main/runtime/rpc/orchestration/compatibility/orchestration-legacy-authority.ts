@@ -13,6 +13,7 @@ import '../../../orchestration/db/messages/mailbox-routing-page'
 import '../../../orchestration/db/dispatch-row-writer'
 import '../../../orchestration/db/attempt-outcome-projection'
 import type { RpcRequest } from '../../core'
+import { isSelectiveAckRequest } from '../callers/selective-ack-caller'
 import {
   equivalentLegacyPaneKey,
   legacyCoordinatorReadOnly,
@@ -75,35 +76,6 @@ export function verifyAttestedLegacyCandidate(args: {
 
 export class LegacyCompatibilityAuthority {
   constructor(private readonly runtime: OrcaRuntimeService) {}
-
-  /** Selective acknowledgment cannot attest or revive a retained principal. */
-  assertNotLegacySelectiveCaller(terminalHandle: string): void {
-    const db = this.runtime.getOrchestrationDb()
-    const runId = db.getLegacyAdoption()?.adopted_run_id
-    if (!runId) {
-      return
-    }
-    const paneKey = this.runtime.getTerminalPaneKey(terminalHandle) ?? undefined
-    const identity = { runId, terminalHandle, paneKey }
-    const handleOnly = { runId, terminalHandle }
-    const coordinator = db.getLegacyCoordinatorPrincipal(runId)
-    if (
-      db.resolveLegacyWorkerCandidate(identity) ||
-      db.resolveLegacyWorkerCandidate(handleOnly) ||
-      db.resolveLegacyCompatibilityPrincipalByIdentity({ ...identity, role: 'worker' }) ||
-      db.resolveLegacyCompatibilityPrincipalByIdentity({ ...handleOnly, role: 'worker' }) ||
-      (coordinator
-        ? coordinator.terminal_handle === terminalHandle ||
-          equivalentLegacyPaneKey(coordinator.pane_key, paneKey)
-        : db.isLegacyCoordinatorHandle(runId, terminalHandle))
-    ) {
-      throw new OrchestrationError(
-        'legacy_read_only',
-        'Selective acknowledgment is unavailable to retained legacy callers. No messages were acknowledged.',
-        { effectsApplied: false }
-      )
-    }
-  }
 
   resolveWorkerDispatch(
     request: RpcRequest,
@@ -170,7 +142,8 @@ export class LegacyCompatibilityAuthority {
 
   resolveCheckPrincipal(
     request: RpcRequest,
-    terminalHandle?: string
+    terminalHandle?: string,
+    unboundSelective = false
   ): LegacyCompatibilityPrincipalRow | undefined {
     const db = this.runtime.getOrchestrationDb()
     const adoption = db.getLegacyAdoption()
@@ -178,6 +151,15 @@ export class LegacyCompatibilityAuthority {
       return undefined
     }
     const evidence = request.orchestrationCompatibilityEvidence
+    const selective = isSelectiveAckRequest(request)
+    if (
+      unboundSelective &&
+      ((terminalHandle && db.isLegacyCoordinatorHandle(adoption.adopted_run_id, terminalHandle)) ||
+        (evidence?.terminalHandle &&
+          db.isLegacyCoordinatorHandle(adoption.adopted_run_id, evidence.terminalHandle)))
+    ) {
+      throw legacyReadOnlyError()
+    }
     const existingWorker = db.resolveLegacyCompatibilityPrincipalByIdentity({
       runId: adoption.adopted_run_id,
       role: 'worker',
@@ -185,6 +167,9 @@ export class LegacyCompatibilityAuthority {
       paneKey: evidence?.paneKey
     })
     if (existingWorker) {
+      if (selective) {
+        throw legacyReadOnlyError()
+      }
       verifyAttestedLegacyCandidate({
         runtime: this.runtime,
         evidence,
@@ -198,6 +183,9 @@ export class LegacyCompatibilityAuthority {
       paneKey: evidence?.paneKey
     })
     if (worker) {
+      if (selective) {
+        throw legacyReadOnlyError()
+      }
       return this.attestWorker(request, worker.dispatch)
     }
     if (evidence) {
@@ -247,6 +235,9 @@ export class LegacyCompatibilityAuthority {
         throw legacyCoordinatorReadOnly()
       }
       return undefined
+    }
+    if (isSelectiveAckRequest(request)) {
+      throw legacyReadOnlyError()
     }
     const principal = resolveAttestedLegacyPrincipal({
       runtime: this.runtime,

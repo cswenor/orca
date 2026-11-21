@@ -189,8 +189,8 @@ export function lookAroundConnectorVerbAllowed(verb: string, args: ConnectorActi
   return verb === 'find' || verb === 'capabilities' || verb === 'places'
 }
 
-/** Orchestration methods a look-around run may call: the ones that only read. */
-const READ_ORCHESTRATION_METHODS: ReadonlySet<string> = new Set([
+/** Inspection methods and inbox checkpoints allowed from a look-around run. */
+const LOOK_AROUND_ORCHESTRATION_METHODS: ReadonlySet<string> = new Set([
   'orchestration.runList',
   'orchestration.runShow',
   'orchestration.runCurrent',
@@ -202,9 +202,10 @@ const READ_ORCHESTRATION_METHODS: ReadonlySet<string> = new Set([
   'orchestration.callerShow',
   'orchestration.sessionAddress',
   'orchestration.partyLocation',
-  'orchestration.check'
+  'orchestration.check',
+  'orchestration.ackMessages'
 ])
 
 export function lookAroundOrchestrationAllowed(method: string): boolean {
-  return READ_ORCHESTRATION_METHODS.has(method)
+  return LOOK_AROUND_ORCHESTRATION_METHODS.has(method)
 }

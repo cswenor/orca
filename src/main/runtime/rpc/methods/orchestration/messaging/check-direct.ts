@@ -9,6 +9,39 @@ import { withReplyFollowUps, exposeMessages } from './mailbox-message-receipt'
 import { staleDelivery } from '../../../../orchestration/db/messages/role-mailbox-delivery'
 import { ORCHESTRATION_LEGACY_RUN_ID } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
 import type { MailboxCheckParams } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
+import { runOwnsDirectMessageSql } from '../../../../orchestration/db/runs/run-coordinator-mail-routing'
+
+function assertCurrentDirectMail(hasLegacyMail: boolean): void {
+  if (hasLegacyMail) {
+    throw new OrchestrationError(
+      'legacy_read_only',
+      'Legacy orchestration messages are inspect-only; use --peek or --all. No acknowledgment was applied.',
+      { effectsApplied: false }
+    )
+  }
+}
+
+/** Same legacy fence as the consuming read, without loading nonselected message bodies. */
+export function assertSelectableDirectMailbox(
+  db: OrchestrationDb,
+  handle: string,
+  unboundOnly: boolean
+): void {
+  if (!unboundOnly) {
+    assertCurrentDirectMail(
+      Boolean(
+        db.db
+          .prepare(
+            `SELECT 1 FROM messages
+             WHERE to_handle = ? AND run_id = ? AND read = 0
+               AND delivery_contract = 'current_delivery' AND NOT ${runOwnsDirectMessageSql('messages')}
+             LIMIT 1`
+          )
+          .get(handle, ORCHESTRATION_LEGACY_RUN_ID)
+      )
+    )
+  }
+}
 
 export async function checkDirectMailbox(args: {
   params: MailboxCheckParams
@@ -35,7 +68,10 @@ export async function checkDirectMailbox(args: {
       ids: params.ackIds,
       direct: true,
       runId: args.runId,
-      revalidateConsumer: args.revalidateConsumer,
+      revalidateConsumer: () => {
+        args.revalidateConsumer()
+        assertSelectableDirectMailbox(db, handle, args.runId !== undefined)
+      },
       recordReceipt: args.recordMutationReceipt
     })
   }
@@ -51,14 +87,9 @@ export async function checkDirectMailbox(args: {
         ? db.getAllMessagesForHandle(handle, undefined, typeFilter, args.runId)
         : db.getUnreadMessages(handle, typeFilter, { excludeRunOwnedDirect: true })
     ).filter((message) => args.runId === undefined || message.run_id === args.runId)
-    if (
-      consumeUnread &&
-      messages.some((message) => message.run_id === ORCHESTRATION_LEGACY_RUN_ID)
-    ) {
-      throw new OrchestrationError(
-        'legacy_read_only',
-        'Legacy orchestration messages are inspect-only; use --peek or --all. No acknowledgment was applied.',
-        { effectsApplied: false }
+    if (consumeUnread) {
+      assertCurrentDirectMail(
+        messages.some((message) => message.run_id === ORCHESTRATION_LEGACY_RUN_ID)
       )
     }
     const respond = (visibleMessages: typeof messages) =>

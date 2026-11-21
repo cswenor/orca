@@ -210,9 +210,39 @@ it('uses the ordinary Dispatch pane fence without adding a launch check', async 
   }
   expect(db.getMessageById(selected.id)?.read).toBe(0)
   vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(pane)
+  const direct = db.insertMessage({ from: 'term_coord', to: terminal, subject: 'unbound status' })
+  const unbound = { terminal, run: 'run_unbound' }
+  for (const [method, params] of [
+    ['orchestration.check', unbound],
+    ['orchestration.ackMessages', { ...unbound, ackIds: [direct.id] }]
+  ] as const) {
+    await expect(harness.call(method, params, ctx)).rejects.toMatchObject({
+      code: 'consumer_fenced'
+    })
+  }
+  expect(db.getMessageById(direct.id)?.read).toBe(0)
   await expect(
     harness.call('orchestration.ackMessages', { terminal, ackIds: [selected.id] }, ctx)
   ).resolves.toMatchObject({ dispatchId: dispatch.id, markedIds: [selected.id] })
+})
+
+it('shares the ordinary legacy fence for the implicit direct mailbox', async () => {
+  const { db, ctx } = harness.setup(false)
+  const terminal = 'term_coord'
+  db.insertMessage({
+    from: 'term_sender',
+    to: terminal,
+    runId: 'run_legacy_local',
+    subject: 'old contract on the same address'
+  })
+  const selected = db.insertMessage({ from: 'term_sender', to: terminal, subject: 'current mail' })
+  await expect(harness.call('orchestration.check', { terminal }, ctx)).rejects.toMatchObject({
+    code: 'legacy_read_only'
+  })
+  await expect(
+    harness.call('orchestration.ackMessages', { terminal, ackIds: [selected.id] }, ctx)
+  ).rejects.toMatchObject({ code: 'legacy_read_only' })
+  expect(db.getMessageById(selected.id)?.read).toBe(0)
 })
 
 it('only writes read state and a receipt, including on dispatcher replay', async () => {
@@ -256,6 +286,13 @@ it('only writes read state and a receipt, including on dispatcher replay', async
     )
     .run(fingerprint)
   const expired = db.getMutationReceipt(fingerprint, 'expired-request')
+  const retry = { ...ack, params: { ...ack.params, replayOnly: true } }
+  await expect(dispatcher.dispatch(retry)).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'operation_unknown', data: { effectsApplied: false } }
+  })
+  expect(db.getMutationReceipt(fingerprint, ack.orchestrationRequestId)).toBeUndefined()
+  expect(db.getMessageById(selected.id)).toEqual(original)
   await expect(
     dispatcher.dispatch({
       ...ack,
@@ -278,6 +315,10 @@ it('only writes read state and a receipt, including on dispatcher replay', async
       })
     )
   }
+  await expect(dispatcher.dispatch(retry)).resolves.toMatchObject({
+    ok: true,
+    result: { markedIds: [selected.id], mutation: { replayed: true } }
+  })
   expect(db.getMessageById(selected.id)).toEqual({ ...original, read: 1 })
   expect(db.getMutationReceipt(fingerprint, ack.orchestrationRequestId)?.state).toBe('completed')
   expect(db.getMutationReceipt(fingerprint, 'expired-request')).toEqual(expired)
@@ -455,7 +496,33 @@ it('replays only on the original process and implicit Run', async () => {
   })
 })
 
-it('selectively acknowledges pre-bind Dispatch mail without disturbing an outstanding Run delivery', async () => {
+it('allows a fresh acknowledgment with ordinary pane fallback but cannot replay without a process', async () => {
+  const { db, runtime } = harness.setup(false)
+  const terminal = 'term_coord'
+  vi.mocked(runtime.getTerminalProcessIncarnation).mockReturnValue(null)
+  const selected = db.insertMessage({ from: 'term_sender', to: terminal, subject: 'recovered' })
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+  const request = {
+    id: 'rpc_ack_without_process',
+    authToken: 'test',
+    method: 'orchestration.ackMessages',
+    params: { terminal, ackIds: [selected.id] },
+    orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+    orchestrationRequestId: 'ack_without_process'
+  }
+  await expect(dispatcher.dispatch(request)).resolves.toMatchObject({
+    ok: true,
+    result: { markedIds: [selected.id] }
+  })
+  await expect(
+    dispatcher.dispatch({ ...request, params: { ...request.params, replayOnly: true } })
+  ).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'operation_unknown', data: { effectsApplied: false } }
+  })
+})
+
+it('enforces ordinary residual precedence while selecting only eligible messages', async () => {
   const { db, runtime, ctx } = harness.setup()
   const pane = 'tab_lead:22222222-2222-4222-9222-222222222222'
   vi.mocked(runtime.getTerminalPaneKey).mockImplementation((handle) =>
@@ -518,20 +585,25 @@ it('selectively acknowledges pre-bind Dispatch mail without disturbing an outsta
   ctx.recordMutationReceipt = (receipt) => {
     db.completeMutationReceipt({ ...receiptIdentity, receipt: JSON.stringify(receipt) })
   }
-  const selection = { terminal: 'term_lead', ackIds: ['msg_prebind', 'msg_child_status'] }
+  const mixed = { terminal: 'term_lead', ackIds: ['msg_prebind', 'msg_child_status'] }
+  await expect(harness.call('orchestration.ackMessages', mixed, ctx)).rejects.toMatchObject({
+    code: 'invalid_argument'
+  })
+  expect(db.getMessageById('msg_prebind')?.read).toBe(0)
+  expect(db.getMessageById('msg_child_status')?.read).toBe(0)
+  const selection = { terminal: 'term_lead', ackIds: ['msg_child_status'] }
   await expect(harness.call('orchestration.ackMessages', selection, ctx)).resolves.toMatchObject({
-    markedIds: ['msg_prebind', 'msg_child_status']
+    markedIds: ['msg_child_status']
   })
   expect(
     JSON.parse(db.getMutationReceipt('caller_run', 'selected_run_ack')!.receipt!)
   ).toMatchObject({
     runId: run.id,
-    markedIds: ['msg_prebind', 'msg_child_status']
+    markedIds: ['msg_child_status']
   })
   await expect(harness.call('orchestration.ackMessages', selection, ctx)).resolves.toMatchObject({
-    alreadyReadIds: ['msg_prebind', 'msg_child_status']
+    alreadyReadIds: ['msg_child_status']
   })
-  expect(db.getMessageById('msg_prebind')?.read).toBe(1)
   expect(db.getMessageById('msg_child_question')?.read).toBe(0)
   expect(
     db.getOrCreateRunDelivery({ runId: run.id, consumerGeneration: run.consumer_generation })
@@ -539,6 +611,19 @@ it('selectively acknowledges pre-bind Dispatch mail without disturbing an outsta
     delivery: { id: delivery.delivery.id },
     messages: [{ id: 'msg_child_status' }, { id: 'msg_child_question' }]
   })
+  ctx.recordMutationReceipt = undefined
+  await harness.call(
+    'orchestration.check',
+    { terminal: 'term_lead', ack: delivery.delivery.id },
+    ctx
+  )
+  await expect(
+    harness.call(
+      'orchestration.ackMessages',
+      { terminal: 'term_lead', ackIds: ['msg_prebind'] },
+      ctx
+    )
+  ).resolves.toMatchObject({ markedIds: ['msg_prebind'] })
 })
 
 it('rejects the wrong owning Run and keeps a receipt on the original Dispatch generation', async () => {

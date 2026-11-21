@@ -107,7 +107,8 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
           terminal,
           terminalPaneKey: paneKey || undefined,
           run: getPresentStringFlag(flags, 'run'),
-          ackIds
+          ackIds,
+          ...(flags.has('retry-request') ? { replayOnly: true } : {})
         }
       )
       printResult(

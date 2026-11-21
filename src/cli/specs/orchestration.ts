@@ -103,7 +103,7 @@ export const ORCHESTRATION_COMMAND_SPECS: CommandSpec[] = [
     usage:
       'orca orchestration check [--terminal <handle>] [--run <run_id>] [--ack <delivery_id> | --ack-ids <msg_id,...>] [--unread | --peek | --all] [--types <type,...>] [--format] [--wait] [--timeout-ms <n>] [--retry-request <id>] [--json]\n' +
       "  default: return the bound Run's oldest unread FIFO batch and mark it handled.\n" +
-      '  --ack: optional; acknowledges a batch from an older Orca that does not mark it.\n  --ack-ids: mark only the listed messages read; never take another batch. Uses the same mailbox authorization as an ordinary consuming check.\n             mutation_ledger_full means no messages were marked; ordinary mutation maintenance can free receipt space.\n' +
+      '  --ack: optional; acknowledges a batch from an older Orca that does not mark it.\n  --ack-ids: mark only the listed messages read; never take another batch. Uses the same mailbox authorization as an ordinary consuming check.\n             With --retry-request, only replay; a missing receipt never marks mail.\n             mutation_ledger_full means no messages were marked; ordinary mutation maintenance can free receipt space.\n' +
       '  --peek: return only unread messages without marking them read.\n  --all: return recent messages for the handle; does not mark read.\n' +
       '  --wait: block until a matching message arrives or --timeout-ms expires.\n' +
       '          Emits JSON keepalive lines to stderr every 15s so the caller can\n' +

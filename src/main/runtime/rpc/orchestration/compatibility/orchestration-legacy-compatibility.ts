@@ -20,6 +20,7 @@ import type {
 } from './orchestration-legacy-operation'
 import { LegacyCoordinatorAuthority } from './orchestration-legacy-coordinator-authority'
 import { isSelectiveAckRequest } from '../callers/selective-ack-caller'
+import { legacyReadOnlyError } from './orchestration-legacy-process-identity'
 
 const COORDINATOR_PREFLIGHT_METHODS = new Set([
   'orchestration.taskCreate',
@@ -32,6 +33,7 @@ const COORDINATOR_PREFLIGHT_METHODS = new Set([
   'orchestration.requestShow',
   'orchestration.send',
   'orchestration.check',
+  'orchestration.ackMessages',
   'orchestration.reply'
 ])
 
@@ -73,13 +75,6 @@ export class OrchestrationLegacyCompatibility {
       return { handled: false }
     }
     const values = params as Record<string, unknown>
-    if (isSelectiveAckRequest(request)) {
-      const terminal = stringValue(values.terminal)
-      if (terminal) {
-        this.authority.assertNotLegacySelectiveCaller(terminal)
-      }
-      return { handled: false }
-    }
     if (CURRENT_AUTHORITY_PREFLIGHT_METHODS.has(request.method)) {
       const callerAuthority = this.resolveCurrentAuthority(request, values)
       if (callerAuthority) {
@@ -113,6 +108,9 @@ export class OrchestrationLegacyCompatibility {
       return { handled: false }
     }
     const authority = this.coordinatorAuthority.resolve(request, requestedRunId)
+    if (authority && isSelectiveAckRequest(request)) {
+      throw legacyReadOnlyError()
+    }
     return authority
       ? {
           handled: false,
@@ -229,7 +227,7 @@ export class OrchestrationLegacyCompatibility {
         params: params as LegacySendParams
       })
     }
-    if (request.method === 'orchestration.check') {
+    if (request.method === 'orchestration.check' || isSelectiveAckRequest(request)) {
       return await handleLegacyCheck({
         runtime: this.runtime,
         authority: this.authority,
@@ -283,7 +281,7 @@ function currentCallerHandle(method: string, params: Record<string, unknown>): s
   ) {
     return stringValue(params.callerTerminalHandle)
   }
-  if (method === 'orchestration.check') {
+  if (method === 'orchestration.check' || method === 'orchestration.ackMessages') {
     return stringValue(params.terminal)
   }
   return stringValue(params.from)

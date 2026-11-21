@@ -25,15 +25,17 @@ Unselected mail, including questions arriving after inspection, stays unread.
 Every ID must exist in the caller's current mailbox (direct, bound Run or
 Dispatch); an unknown, foreign or legacy ID rejects the entire selection.
 An implicitly bound child Run can also acknowledge pre-bind Dispatch mail while
-it remains that Dispatch's current consumer, even with an outstanding Run delivery.
+it remains that Dispatch's current consumer and no Run delivery is outstanding.
 A bound Run selection never includes the caller's own direct mail. To select
-only unbound direct mail, specify `--run run_unbound`.
+only unbound direct mail, specify `--run run_unbound` where an ordinary check
+can consume that direct mailbox.
 If any selected ID is a lifecycle report (`worker_done` or `heartbeat`), or any
 selected unread message is held by a structured chat, the entire selection is
 refused. Use a normal check for that mail.
-The CLI supplies the required request ID. `--retry-request` only replays for the
-original process or concrete live chat lease and mailbox generation. If either
-changed, inspect the current mailbox again.
+The CLI supplies the required request ID. `--retry-request` is read-only: it
+replays an existing receipt only for the original process or concrete chat lease
+and mailbox generation. If it cannot replay, inspect the mailbox before
+issuing a fresh acknowledgment.
 Released agent sessions cannot acknowledge wake-up mail until they are running
 again. Do not use this to discard mail the agent has not processed.
 

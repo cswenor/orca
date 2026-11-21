@@ -3,6 +3,8 @@ import type { OrcaRuntimeService } from '../../../orca-runtime'
 import { OrchestrationError } from '../../../orchestration/orchestration-error'
 import { formatMessageBanner } from '../../../orchestration/mailbox/formatting/message-formatting'
 import { ORCHESTRATION_MESSAGE_WAIT_DEFAULT_TIMEOUT_MS } from '../../../../../shared/orchestration/mailbox/orchestration-message-wait-timeout'
+import { ORCHESTRATION_UNBOUND_RUN_ID } from '../../../../../shared/orchestration/orchestration-rpc-contract'
+import { isSelectiveAckRequest } from '../callers/selective-ack-caller'
 import type { LegacyCompatibilityAuthority } from './orchestration-legacy-authority'
 import {
   operationIdentity,
@@ -23,6 +25,10 @@ export async function handleLegacyCheck(args: {
 }): Promise<unknown> {
   const { runtime, authority, request, params, signal } = args
   if (params.run) {
+    if (params.run === ORCHESTRATION_UNBOUND_RUN_ID && isSelectiveAckRequest(request)) {
+      // The explicit direct scope cannot be used to reach a retained caller's private mailbox.
+      authority.resolveCheckPrincipal(request, params.terminal, true)
+    }
     return undefined
   }
   const typeFilter = parseLegacyTypes(params.types)

@@ -108,7 +108,7 @@ describe('a structured worker that names itself by session id', () => {
     })
   })
 
-  it('lets a cleared worker acknowledge its original Dispatch but fences a new lease', async () => {
+  it('fences retries after a lease change for both injected and declared workers', async () => {
     const { run } = resultOf(
       await h.dispatch(
         orchestrationRequest(
@@ -148,12 +148,31 @@ describe('a structured worker that names itself by session id', () => {
     }
     const current = sessionRecord(successor)
     h.records.set(successor, current)
-    const acknowledge = () => h.dispatch(acknowledgment(successor, message.id, 'clear-worker-ack'))
-    expect(resultOf(await acknowledge())).toMatchObject({ markedIds: [message.id] })
-    expect(resultOf(await acknowledge())).toMatchObject({ mutation: { replayed: true } })
+    const injected = acknowledgment(successor, message.id, 'clear-worker-ack')
+    const declaredMail = h.db.insertMessage({
+      from: 'term_sender',
+      to: `dispatch:${dispatch.id}`,
+      runId,
+      subject: 'status read by declared worker'
+    })
+    const declared = orchestrationRequest('orchestration.ackMessages', {
+      terminal: ADDRESS_Y,
+      ackIds: [declaredMail.id]
+    })
+    for (const [request, id] of [
+      [injected, message.id],
+      [declared, declaredMail.id]
+    ] as const) {
+      expect(resultOf(await h.dispatch(request))).toMatchObject({ markedIds: [id] })
+      expect(resultOf(await h.dispatch(request))).toMatchObject({ mutation: { replayed: true } })
+    }
     current.lease = { ...current.lease, runtimeFence: current.lease.runtimeFence + 1 }
-    // The current session can act, but a different live lease cannot replay an older receipt.
-    expect(await acknowledge()).toMatchObject({ ok: false, error: { code: 'request_mismatch' } })
+    for (const request of [injected, declared]) {
+      expect(await h.dispatch(request)).toMatchObject({
+        ok: false,
+        error: { code: 'request_mismatch' }
+      })
+    }
   })
 
   it('preserves selected wake-up mail until a released session is running again', async () => {

@@ -42,6 +42,13 @@ export function replayStableCallerParams(
     })
   }
   delete result.waitSubmitMs
+  if (method === 'orchestration.ackMessages') {
+    delete result.replayOnly
+    if (typeof source.terminalPaneKey === 'string') {
+      result.terminalPaneKey =
+        parsePaneKey(source.terminalPaneKey)?.leafId ?? source.terminalPaneKey
+    }
+  }
   for (const property of ['from', 'callerTerminalHandle', 'terminal'] as const) {
     const handle = source[property]
     if (typeof handle !== 'string') {

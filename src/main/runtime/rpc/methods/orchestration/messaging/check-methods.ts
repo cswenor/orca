@@ -7,6 +7,7 @@ import {
 } from '../../../../../../shared/rpc-contract/orchestration/orchestration-params'
 import type { RpcContext } from '../../../core'
 import type { OrcaRuntimeService } from '../../../../orca-runtime'
+import type { OrchestrationPartyIdentity } from '../../../../../../shared/orchestration/mailbox/orchestration-party-identity'
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import { parseMessageTypes } from '../routing'
 import { checkRunMailbox } from './check-run'
@@ -104,6 +105,28 @@ export function resolveMailboxCheckScope(
   return { ...callerScope, kind: 'direct' as const, unboundOnly }
 }
 
+export function assertDirectMailboxConsumer(
+  db: OrchestrationDb,
+  scope: {
+    unboundOnly: boolean
+    caller: OrchestrationPartyIdentity
+    handle: string
+    paneKey: string | undefined
+  }
+): void {
+  const { unboundOnly, caller, handle, paneKey } = scope
+  if (
+    (!unboundOnly && db.getCurrentRunForCoordinator(caller)) ||
+    db.getActiveDispatchForIdentity(handle, paneKey) ||
+    (paneKey && db.findActiveRemoteAttachmentForPane(paneKey))
+  ) {
+    throw new OrchestrationError(
+      'consumer_fenced',
+      'This direct mailbox became owned by a Run or Dispatch while checking mail.'
+    )
+  }
+}
+
 async function checkMailbox(
   params: MailboxCheckParams,
   {
@@ -119,7 +142,7 @@ async function checkMailbox(
   const db = runtime.getOrchestrationDb()
   const typeFilter = parseMessageTypes(params.types)
   const scope = resolveMailboxCheckScope(runtime, db, params, orchestrationCaller)
-  const { handle, livePane, caller, paneKey, consumingCheck } = scope
+  const { handle, livePane, paneKey, consumingCheck } = scope
 
   const reader = sessionCallerOf(orchestrationCaller)
   // Mail this check takes may still wait as a card in a chat's queue; that card must not run too.
@@ -235,17 +258,7 @@ async function checkMailbox(
         recordMutationReceipt,
         revalidateConsumer: () => {
           revalidateCaller()
-          if (
-            !(unboundOnly && params.ackIds) &&
-            ((!unboundOnly && db.getCurrentRunForCoordinator(caller)) ||
-              db.getActiveDispatchForIdentity(handle, paneKey) ||
-              (paneKey && db.findActiveRemoteAttachmentForPane(paneKey)))
-          ) {
-            throw new OrchestrationError(
-              'consumer_fenced',
-              'This direct mailbox became owned by a Run or Dispatch while checking mail.'
-            )
-          }
+          assertDirectMailboxConsumer(db, scope)
         }
       })
     )

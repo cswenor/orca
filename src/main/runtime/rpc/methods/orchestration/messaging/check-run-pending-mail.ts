@@ -83,7 +83,7 @@ export async function checkRunPendingMail(args: {
     }
     return (
       callerHoldsResidualDispatch(runtime, db, residual, run.id, paneKey, caller.orcaSessionId) &&
-      Boolean(params.ackIds || residualAck || !db.hasOutstandingMailboxDelivery(address))
+      Boolean(residualAck || !db.hasOutstandingMailboxDelivery(address))
     )
   }
   if (params.ackIds) {
@@ -105,6 +105,7 @@ export async function checkRunPendingMail(args: {
                   if (
                     current?.id !== residual.id ||
                     current.consumer_generation !== residual.consumer_generation ||
+                    db.hasOutstandingMailboxDelivery(address) ||
                     !callerHoldsResidualDispatch(
                       runtime,
                       db,
