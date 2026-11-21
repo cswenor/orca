@@ -107,7 +107,7 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
       cwd,
       client,
       'terminal',
-      ackIds ? { recordEnvironmentUsage: false } : undefined
+      ackIds ? { requireKnownHandle: true } : undefined
     )
     // Sessions use their injected id; inherited pane keys belong to a different caller.
     const paneKey =

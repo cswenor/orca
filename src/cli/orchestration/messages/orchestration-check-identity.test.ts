@@ -51,6 +51,19 @@ describe('orchestration check identity', () => {
     expect(callMock.mock.calls.map(([method]) => method)).toEqual(['status.get'])
   })
 
+  it('does not infer or mint a caller handle for selective acknowledgment', async () => {
+    vi.stubEnv('ORCA_AGENT_SESSION_ID', undefined)
+    callMock.mockResolvedValueOnce({
+      result: { capabilities: [ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY] }
+    })
+    await expect(invokeCheck(new Map([['ack-ids', 'msg_selected']]))).rejects.toMatchObject({
+      code: 'no_active_sender_terminal',
+      message: expect.stringContaining('--terminal')
+    })
+    expect(getTerminalHandleMock).not.toHaveBeenCalled()
+    expect(callMock.mock.calls.map(([method]) => method)).toEqual(['status.get'])
+  })
+
   it('rejects empty entries in --ack-ids before contacting the runtime', async () => {
     await expect(invokeCheck(new Map([['ack-ids', 'msg_selected,']]))).rejects.toMatchObject({
       code: 'invalid_argument'

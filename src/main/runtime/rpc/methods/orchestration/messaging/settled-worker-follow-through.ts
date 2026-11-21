@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises'
 import { parseOrcaSessionAddress } from '../../../../../../shared/agent-session/identity/orca-session-address'
 import type { OrcaRuntimeService } from '../../../../orca-runtime'
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
@@ -46,9 +47,10 @@ export function followThroughWorkerReport(
 function continueUnreadWorkerMail(
   runtime: OrcaRuntimeService,
   db: OrchestrationDb,
-  dispatchId: string
+  dispatchId: string,
+  restoring = false
 ): Promise<void> {
-  return continueUnreadMail(runtime, db, dispatchId).catch((error: unknown) => {
+  return continueUnreadMail(runtime, db, dispatchId, restoring).catch((error: unknown) => {
     console.warn('[orchestration] unread worker mail was not continued', dispatchId, error)
   })
 }
@@ -68,7 +70,8 @@ const CHAT_FOLLOW_UP_TASK = {
 async function continueUnreadMail(
   runtime: OrcaRuntimeService,
   db: OrchestrationDb,
-  dispatchId: string
+  dispatchId: string,
+  restoring: boolean
 ): Promise<void> {
   const first = db.getUnreadMessages(`dispatch:${dispatchId}`, [...FOLLOW_UP_MESSAGE_TYPES])[0]
   if (!first) {
@@ -154,7 +157,7 @@ async function continueUnreadMail(
       worker?.last_error ?? worker?.state ?? 'unknown'
     )
   }
-  return passHeldWorkerMail(runtime, db, followUpId)
+  return passHeldWorkerMail(runtime, db, followUpId, restoring)
 }
 
 /** Whether a follow-up took over its worker: ready or already reported, failed, or still starting. */
@@ -174,7 +177,8 @@ function custodyOf(
 export function passHeldWorkerMail(
   runtime: OrcaRuntimeService,
   db: OrchestrationDb,
-  followUpId: string
+  followUpId: string,
+  restoring = false
 ): Promise<void> | undefined {
   // The follow-up's claim and the moves below re-address mail a chat may still hold as a card: the
   // lineage's mailboxes are the only ones whose cards can go stale.
@@ -228,9 +232,15 @@ export function passHeldWorkerMail(
   runtime.withdrawStaleChatMail(lineageMailboxes)
   if (custody === 'ready') {
     // Its Task is in: a chat's moved mail follows it, each message whole.
-    runtime.deliverPendingMessagesForHandle(`dispatch:${followUpId}`)
+    const mailbox = `dispatch:${followUpId}`
+    if (restoring) {
+      return runtime.repointPendingMessagesForHandle(mailbox, true)
+    }
+    runtime.deliverPendingMessagesForHandle(mailbox)
   }
-  return custody === 'reported' ? continueUnreadWorkerMail(runtime, db, followUpId) : undefined
+  return custody === 'reported'
+    ? continueUnreadWorkerMail(runtime, db, followUpId, restoring)
+    : undefined
 }
 
 /** Nothing is lost silently: the coordinator hears that its mail did not reach the worker, once per batch. */
@@ -284,16 +294,9 @@ export function continueRestoredWorkerMailSoon(
   db: OrchestrationDb,
   isCurrent: () => boolean
 ): Promise<void> {
-  const { promise, resolve, reject } = Promise.withResolvers<void>()
-  const timer = setTimeout(() => {
-    if (isCurrent()) {
-      void continueAllUnreadWorkerMail(runtime, db).then(resolve, reject)
-    } else {
-      resolve()
-    }
-  }, 0)
-  timer.unref?.()
-  return promise
+  return delay(0, undefined, { ref: false }).then(() =>
+    isCurrent() ? continueAllUnreadWorkerMail(runtime, db) : undefined
+  )
 }
 
 /** At startup: continue what a restart interrupted between a report and its follow-up. */
@@ -304,7 +307,7 @@ export async function continueAllUnreadWorkerMail(
   try {
     const ids = listDispatchesWithFollowUpMail(db)
     if (ids.length !== 0) {
-      await Promise.all(ids.map((id) => continueUnreadWorkerMail(runtime, db, id)))
+      await Promise.all(ids.map((id) => continueUnreadWorkerMail(runtime, db, id, true)))
     }
   } catch (error) {
     // A database closed before this ran (shutdown, tests) has nothing left to continue.

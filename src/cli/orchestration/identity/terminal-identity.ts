@@ -18,7 +18,7 @@ export async function resolveOrchestrationTerminalHandle(
   cwd: string,
   client: RuntimeClient,
   flagName: 'from' | 'terminal',
-  options: { validateEnvHandle?: boolean; recordEnvironmentUsage?: false } = {}
+  options: { validateEnvHandle?: boolean; requireKnownHandle?: boolean } = {}
 ): Promise<string | undefined> {
   // CLI entry already fences caller flags using the command spec.
   const explicit = getPresentStringFlag(flags, flagName)
@@ -48,12 +48,13 @@ export async function resolveOrchestrationTerminalHandle(
   if (hasStructuredSessionMarker()) {
     throw structuredSessionRefusal(flagName)
   }
-  return await resolveImplicitOrchestrationCaller(
-    cwd,
-    client,
-    flagName,
-    options.recordEnvironmentUsage
-  )
+  if (options.requireKnownHandle) {
+    throw new RuntimeClientError(
+      'no_active_sender_terminal',
+      'Selective acknowledgment needs an existing caller handle. Run it from the mailbox owner or pass its --terminal handle.'
+    )
+  }
+  return await resolveImplicitOrchestrationCaller(cwd, client, flagName)
 }
 
 // terminal.show requires a PTY; resolveIdentity also recognizes structured workers without panes.
@@ -184,15 +185,13 @@ export async function resolveCoordinatorTerminalHandle(
 async function resolveImplicitOrchestrationCaller(
   cwd: string,
   client: RuntimeClient,
-  flagName: 'from' | 'terminal',
-  recordEnvironmentUsage?: false
+  flagName: 'from' | 'terminal'
 ): Promise<string> {
   try {
     // An arbitrary active-terminal choice would let this command speak as a sibling worker.
     return await getTerminalHandle(callerScopeFlags(), cwd, client, {
       requireUnambiguous: true,
-      purpose: 'orchestration-caller',
-      ...(recordEnvironmentUsage === false ? { recordEnvironmentUsage } : {})
+      purpose: 'orchestration-caller'
     })
   } catch (err) {
     if (!isNoActiveTerminalError(err)) {

@@ -325,10 +325,10 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     return pending.size ? Promise.all(pending).then(() => undefined) : undefined
   }
 
-  protected repointPendingMessagesForHandle(
+  repointPendingMessagesForHandle(
     handle: string,
     waitForRedrive: boolean
-  ): void | Promise<void> {
+  ): Promise<void> | undefined {
     try {
       this.deliverPendingMessagesForHandle(handle)
       if (waitForRedrive) {
