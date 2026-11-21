@@ -31,25 +31,26 @@ export class OrchestrationMailboxPointerState {
   whenFlightSettledOrParked(
     ptyId: string,
     through: number,
-    notice?: { id: string; type: string; queuedMailbox?: string }
+    mailbox: string,
+    noticeId: string | undefined,
+    hasQueuedRecoveryMail: (reservedTypes: ReadonlySet<string> | undefined) => boolean
   ): Promise<boolean> | undefined {
     const flight = this.flightsByPtyId.get(ptyId)
-    if (
-      !flight ||
-      flight.oldestSequence > through ||
-      (notice &&
-        !flight.stagedMessageIds.includes(notice.id) &&
-        !this.hasQueuedNotice(ptyId, notice.queuedMailbox, notice.type)) ||
-      (flight.deferredUntilIdle && flight.submitEnter)
-    ) {
+    if (!flight || (flight.deferredUntilIdle && flight.submitEnter)) {
       return undefined
     }
+    const isRecoveryFlight =
+      noticeId === undefined
+        ? flight.oldestSequence <= through
+        : flight.stagedMessageIds.includes(noticeId)
+    if (!isRecoveryFlight) {
+      // A newer flight is relevant only while it blocks eligible recovery mail on this PTY.
+      const queued = this.parkedDeliveriesByPtyId.get(ptyId)
+      if (!queued?.has(mailbox) || !hasQueuedRecoveryMail(queued.get(mailbox))) {
+        return undefined
+      }
+    }
     return (flight.startupCompletion ??= Promise.withResolvers<boolean>()).promise
-  }
-
-  private hasQueuedNotice(ptyId: string, mailbox: string | undefined, type: string): boolean {
-    const queued = mailbox === undefined ? undefined : this.parkedDeliveriesByPtyId.get(ptyId)
-    return mailbox !== undefined && queued?.has(mailbox) === true && !queued.get(mailbox)?.has(type)
   }
 
   beginFlight(ptyId: string, oldestSequence = 0): OrchestrationMailboxDeliveryFlight {

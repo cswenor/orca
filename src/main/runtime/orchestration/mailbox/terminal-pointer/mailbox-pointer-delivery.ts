@@ -88,16 +88,35 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
       : undefined
     const flight = probe
       ? probe.then(() => true)
-      : this.state.whenFlightSettledOrParked(
-          ptyId,
-          through,
-          notice && {
-            id: notice.id,
-            type: notice.type,
-            queuedMailbox: unstaged ? mailbox : undefined
-          }
+      : this.state.whenFlightSettledOrParked(ptyId, through, mailbox, notice?.id, (reservedTypes) =>
+          this.hasQueuedRecoveryMail(mailbox, through, notice?.id, reservedTypes)
         )
     return routing || flight ? { mailbox, routing, flight } : undefined
+  }
+
+  private hasQueuedRecoveryMail(
+    mailbox: string,
+    through: number,
+    noticeId: string | undefined,
+    reservedTypes: ReadonlySet<string> | undefined
+  ): boolean {
+    const db = this.deps.getDb()
+    const waiters = this.deps.getMessageWaiters(mailbox)
+    if (!db || hasUnfilteredOrchestrationWaiter(waiters)) {
+      return false
+    }
+    const isRecoveryMail = (message: MessageRow): boolean =>
+      noticeId === undefined ? message.sequence <= through : message.id === noticeId
+    return (
+      db.getPendingMailboxPointerMessages(mailbox).some(isRecoveryMail) ||
+      selectOrchestrationPointerBatch({
+        db,
+        mailboxHandle: mailbox,
+        waiters,
+        reservedTypes,
+        excludeRunOwnedDirect: !mailbox.startsWith('run:') && !mailbox.startsWith('dispatch:')
+      }).messages.some(isRecoveryMail)
+    )
   }
 
   deliver(
