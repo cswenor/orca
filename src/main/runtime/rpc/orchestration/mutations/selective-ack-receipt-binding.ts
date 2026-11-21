@@ -23,6 +23,7 @@ import { legacyReadOnlyError } from '../compatibility/orchestration-legacy-proce
 import type { DurableMutationInvocation } from './orchestration-mutation-executor'
 import { waitForStartupPhases } from '../../startup/startup-phase-wait'
 import { ORCHESTRATION_MAIL_RECONCILIATION_TIMEOUT_MS } from '../../../../../shared/orchestration/orchestration-timing-budgets'
+import { selectiveAckStartupUnavailable } from '../callers/selective-ack-caller'
 import {
   attachMutationReceipt,
   hashCanonical,
@@ -36,7 +37,10 @@ export async function runSelectiveAckMutation(
   invoke: (mutation: DurableMutationInvocation) => unknown,
   callerFingerprint: string | undefined,
   caller: OrchestrationEntryCaller | undefined,
-  signal?: AbortSignal
+  {
+    signal,
+    selectiveAckStartupDeadline = performance.now() + ORCHESTRATION_MAIL_RECONCILIATION_TIMEOUT_MS
+  }: { signal?: AbortSignal; selectiveAckStartupDeadline?: number } = {}
 ): Promise<unknown> {
   const requestId = request.orchestrationRequestId
   if (!requestId) {
@@ -69,31 +73,34 @@ export async function runSelectiveAckMutation(
   // A replay only verifies current authority. It does not need to wait for unrelated mail.
   const recovery = existing ? undefined : runtime.waitForOrchestrationStartupMailRecovery()
   if (recovery) {
-    const outcome = await waitForStartupPhases(
-      [recovery],
-      ORCHESTRATION_MAIL_RECONCILIATION_TIMEOUT_MS,
-      [signal]
-    )
+    const remaining = Math.max(0, selectiveAckStartupDeadline - performance.now())
+    const outcome = await waitForStartupPhases([recovery], remaining, [signal])
     assertSelectiveAckConnected(signal)
     if (outcome === 'timeout') {
-      throw new OrchestrationError(
-        'runtime_unavailable',
-        'Startup mailbox recovery is still running. No messages were acknowledged.',
-        { effectsApplied: false }
-      )
+      throw selectiveAckStartupUnavailable()
     }
     // A concurrent identical acknowledgment may have committed while this request waited.
     existing = readReceipt()
   }
-  const readBinding = () => selectiveAckReceiptBinding(runtime, request, params, caller)
+  const residualDispatchId = existing?.payload_hash.split(':')[1]
+  const readBinding = () =>
+    selectiveAckReceiptBinding(
+      runtime,
+      request,
+      params,
+      caller,
+      existing ? (residualDispatchId ?? null) : undefined
+    )
   const target = readBinding()
   const binding = hashCanonical(target)
   const { method } = request
-  const payloadHash = hashCanonical({
+  const hash = hashCanonical({
     method,
     params: replayStableCallerParams(runtime, params, caller, method),
     binding
   })
+  const residual = 'run' in target ? target.dispatch?.[0] : undefined
+  const payloadHash = residual ? `${hash}:${residual}` : hash
   if (existing) {
     if (existing.method !== method || existing.payload_hash !== payloadHash) {
       throw new OrchestrationError(
@@ -151,7 +158,8 @@ function selectiveAckReceiptBinding(
   runtime: OrcaRuntimeService,
   request: RpcRequest,
   params: unknown,
-  caller: OrchestrationEntryCaller | undefined
+  caller: OrchestrationEntryCaller | undefined,
+  receiptResidualId: string | null | undefined
 ) {
   if (
     !params ||
@@ -260,16 +268,21 @@ function selectiveAckReceiptBinding(
       true
     )
   ) {
-    const scope = {
-      mailbox: `dispatch:${dispatch.id}`,
-      runId: dispatch.run_id,
-      caller: handle,
-      assignee: dispatch.assignee_handle
-    }
-    for (const row of getMessagesByIds(db, ackIds).values()) {
-      if (isSelectedDispatchMessage(row, scope)) {
-        residual = [dispatch.id, dispatch.consumer_generation]
-        break
+    // A replay must retain its original scope even after message-only reset clears the rows.
+    if (receiptResidualId === dispatch.id) {
+      residual = [dispatch.id, dispatch.consumer_generation]
+    } else if (receiptResidualId === undefined) {
+      const scope = {
+        mailbox: `dispatch:${dispatch.id}`,
+        runId: dispatch.run_id,
+        caller: handle,
+        assignee: dispatch.assignee_handle
+      }
+      for (const row of getMessagesByIds(db, ackIds).values()) {
+        if (isSelectedDispatchMessage(row, scope)) {
+          residual = [dispatch.id, dispatch.consumer_generation]
+          break
+        }
       }
     }
   }

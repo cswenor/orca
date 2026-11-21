@@ -46,6 +46,7 @@ type AdmittedUnaryCall = {
   method: RpcMethod
   params: unknown
   caller: OrchestrationEntryCaller | undefined
+  selectiveAckStartupDeadline: number | undefined
 }
 
 export class RpcDispatcher {
@@ -150,7 +151,7 @@ export class RpcDispatcher {
 
     if (!isStreamingMethod(method)) {
       try {
-        const result = await this.invokeUnary({ method, request, params, caller }, options)
+        const result = await this.invokeUnary({ ...admission, method }, options)
         reply(successResponse(request.id, meta, result))
       } catch (error) {
         reply(mapDispatcherError(request, meta, error))
@@ -202,7 +203,7 @@ export class RpcDispatcher {
   }
 
   private async invokeUnary(
-    { request, method, params, caller }: AdmittedUnaryCall,
+    { request, method, params, caller, selectiveAckStartupDeadline }: AdmittedUnaryCall,
     options: RpcDispatchStreamingOptions | undefined
   ): Promise<unknown> {
     const { runtime, orchestrationMutations, legacyOrchestration, pinnedCallerScope: scope } = this
@@ -297,7 +298,7 @@ export class RpcDispatcher {
       invoke,
       callerFingerprint,
       context.orchestrationCaller,
-      context.signal
+      selectiveAck ? { signal: context.signal, selectiveAckStartupDeadline } : undefined
     )
     if (selectiveAck || isCallerProbe(request)) {
       return result

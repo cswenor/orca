@@ -61,6 +61,47 @@ it('times out without marking or recording the request while startup recovery st
   }
 })
 
+it.each([false, true])(
+  'uses one startup deadline across identity and mail recovery (identity resolves: %s)',
+  async (resolveIdentity) => {
+    const { db, runtime, message, request } = setupAck()
+    const incarnation = vi.mocked(runtime.getTerminalProcessIncarnation)
+    incarnation.mockReturnValue(null)
+    const recovery = Promise.withResolvers<void>()
+    vi.spyOn(runtime, 'waitForOrchestrationStartupMailRecovery').mockReturnValue(recovery.promise)
+    vi.useFakeTimers()
+    runtime.startupWorkerAuthority.begin()
+    const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+    const pending = dispatcher.dispatch(request)
+    try {
+      const firstWait = 3_000
+      await vi.advanceTimersByTimeAsync(firstWait)
+      expect(await Promise.race([pending, Promise.resolve('still waiting')])).toBe('still waiting')
+      if (resolveIdentity) {
+        incarnation.mockReturnValue('runtime_test:term_coord:1')
+        runtime.startupWorkerAuthority.finish()
+      }
+      await vi.advanceTimersByTimeAsync(ORCHESTRATION_MAIL_RECONCILIATION_TIMEOUT_MS - firstWait)
+      expect(await Promise.race([pending, Promise.resolve('still waiting')])).toMatchObject({
+        ok: false,
+        error: { code: 'runtime_unavailable', data: { effectsApplied: false } }
+      })
+      expect(db.getMessageById(message.id)?.read).toBe(0)
+      expect(
+        db.getMutationReceipt(
+          db.readLocalMutationCallerFingerprint()!,
+          request.orchestrationRequestId
+        )
+      ).toBeUndefined()
+    } finally {
+      runtime.startupWorkerAuthority.finish()
+      recovery.resolve()
+      await pending
+      vi.useRealTimers()
+    }
+  }
+)
+
 it('replays a completed receipt without joining unrelated mailbox recovery', async () => {
   const { db, runtime, message, request } = setupAck()
   const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })

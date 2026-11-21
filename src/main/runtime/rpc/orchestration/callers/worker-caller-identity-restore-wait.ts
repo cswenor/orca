@@ -2,7 +2,7 @@ import type { OrcaRuntimeService } from '../../../orca-runtime'
 import type { RpcRequest } from '../../core'
 import type { OrchestrationCallerField } from '../../methods/orchestration/access/orchestration-method-access'
 import { isDispatchMutationMessageType } from '../../../../../shared/rpc-contract/orchestration/orchestration-params'
-import { isSelectiveAckRequest } from './selective-ack-caller'
+import { selectiveAckStartupUnavailable } from './selective-ack-caller'
 
 // The calls a worker makes as itself, each fenced on its terminal's pane and process.
 const WORKER_REPORT_METHODS: ReadonlySet<string> = new Set([
@@ -21,7 +21,8 @@ export function waitForRestoredWorkerCallerIdentity(
   runtime: OrcaRuntimeService,
   request: RpcRequest,
   callerField: OrchestrationCallerField | undefined,
-  signals: readonly (AbortSignal | undefined)[]
+  signals: readonly (AbortSignal | undefined)[],
+  selectiveAckStartupDeadline?: number
 ): Promise<void> | null {
   if (!callerField || !WORKER_REPORT_METHODS.has(request.method)) {
     return null
@@ -36,12 +37,25 @@ export function waitForRestoredWorkerCallerIdentity(
       ? typeof params.type !== 'string' || !isDispatchMutationMessageType(params.type)
       : request.method === 'orchestration.check' && params.wait === true
   const terminal = typeof handle === 'string' ? handle : undefined
-  const readOnly = isSelectiveAckRequest(request)
-  return terminal &&
-    !skipsIdentityCheck &&
-    runtime.startupWorkerAuthority.isPending() &&
+  const readOnly = selectiveAckStartupDeadline !== undefined
+  if (!terminal || skipsIdentityCheck || (readOnly && params.replayOnly === true)) {
+    return null
+  }
+  const restore = runtime.startupWorkerAuthority
+  const identityPending = () =>
+    restore.isPending() &&
     (runtime.getTerminalPaneKey(terminal, undefined, readOnly) === null ||
       runtime.getTerminalProcessIncarnation(terminal, undefined, readOnly) === null)
-    ? runtime.startupWorkerAuthority.wait(signals)
-    : null
+  if (!identityPending()) {
+    return null
+  }
+  if (selectiveAckStartupDeadline === undefined) {
+    return restore.wait(signals)
+  }
+  const remaining = Math.max(0, selectiveAckStartupDeadline - performance.now())
+  return restore.wait(signals, remaining).then(() => {
+    if (identityPending()) {
+      throw selectiveAckStartupUnavailable()
+    }
+  })
 }

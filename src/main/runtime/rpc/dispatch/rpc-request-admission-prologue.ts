@@ -28,6 +28,7 @@ import { waitForRestoredWorkerCallerIdentity } from '../orchestration/callers/wo
 import { checkDeclaredOrchestrationAccess } from '../methods/orchestration/access/orchestration-method-access'
 import { isSelectiveAckRequest } from '../orchestration/callers/selective-ack-caller'
 import { rpcCallContext } from '../rpc-call-context'
+import { ORCHESTRATION_MAIL_RECONCILIATION_TIMEOUT_MS } from '../../../../shared/orchestration/orchestration-timing-budgets'
 
 type RpcRequestAdmissionDeps = {
   runtime: OrcaRuntimeService
@@ -44,6 +45,9 @@ export function admitRpcRequest<M extends RpcMethod | RpcStreamingMethod>(
   isTransportSupported: (method: RpcMethod | RpcStreamingMethod) => method is M
 ) {
   const reject = (rejected: RpcResponse) => ({ rejected })
+  const selectiveAckStartupDeadline = isSelectiveAckRequest(rawRequest)
+    ? performance.now() + ORCHESTRATION_MAIL_RECONCILIATION_TIMEOUT_MS
+    : undefined
   const method = registry.get(rawRequest.method)
   const callerScope = pinnedCallerScope ?? options?.callerScope ?? OWNER_RPC_CALLER_SCOPE
   const denial = denyRpcMethodForCaller(callerScope, rawRequest.method, method?.permission)
@@ -115,7 +119,7 @@ export function admitRpcRequest<M extends RpcMethod | RpcStreamingMethod>(
         return reject(mapDispatcherError(request, meta, error))
       }
     }
-    return { method, request, caller, params: parsedParams.value }
+    return { method, request, caller, params: parsedParams.value, selectiveAckStartupDeadline }
   }
   if (peer) {
     return admitResolved(peer)
@@ -128,10 +132,13 @@ export function admitRpcRequest<M extends RpcMethod | RpcStreamingMethod>(
       (error) => reject(mapDispatcherError(rawRequest, meta, error))
     )
   }
-  const identityRestore = waitForRestoredWorkerCallerIdentity(runtime, rawRequest, callerField, [
-    options?.signal,
-    options?.connectionSignal
-  ])
+  const identityRestore = waitForRestoredWorkerCallerIdentity(
+    runtime,
+    rawRequest,
+    callerField,
+    [options?.signal, options?.connectionSignal],
+    selectiveAckStartupDeadline
+  )
   return identityRestore
     ? identityRestore.then(
         () => admitResolved({ request: rawRequest }),

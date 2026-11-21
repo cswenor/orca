@@ -23,3 +23,11 @@ export function selectiveAckPeerError(): OrchestrationError {
     { effectsApplied: false }
   )
 }
+
+export function selectiveAckStartupUnavailable(): OrchestrationError {
+  return new OrchestrationError(
+    'runtime_unavailable',
+    'Startup mailbox recovery or terminal restore is still running. No messages were acknowledged.',
+    { effectsApplied: false }
+  )
+}
