@@ -169,7 +169,16 @@ export class OrchestrationMailboxOwner {
     // Notifications were queued before this promise resolved. Join their redrives without
     // scheduling a second push or changing the ordinary notification order.
     const mailboxes = await completion
-    await Promise.all(Array.from(mailboxes, (mailbox) => delivery.whenIdle(mailbox)))
+    const pending: Promise<void>[] = []
+    for (const mailbox of mailboxes) {
+      const redrive = delivery.whenIdle(mailbox)
+      if (redrive) {
+        pending.push(redrive)
+      }
+    }
+    if (pending.length) {
+      await Promise.all(pending)
+    }
   }
 
   private routeDetachedDirectPage(
