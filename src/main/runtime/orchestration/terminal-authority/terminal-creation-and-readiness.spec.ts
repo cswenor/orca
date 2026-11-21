@@ -8,6 +8,9 @@ import { OrcaRuntimeService } from '../../orca-runtime'
 import '../../orca-runtime-test-mocks/setup.spec'
 import { makePaneKey, parsePaneKey } from '../../../../shared/workspace-layout/stable-pane-id'
 import { assertSelectiveAckCaller } from '../../rpc/orchestration/callers/selective-ack-caller'
+import { commitPtyIpcSpawn } from '../../../ipc/pty/ipc/spawn-commit'
+import { createPtyIpcSpawnState } from '../../../ipc/pty/ipc/spawn-state'
+import { unregisterPty } from '../../../memory/pty-registry'
 import {
   HEADLESS_LEAF_ID,
   RESTORED_AUTHORITY_TOKEN,
@@ -94,6 +97,76 @@ describe('OrcaRuntimeService', () => {
     expect((await runtime.listTerminals()).terminals).toEqual([
       expect.not.objectContaining({ agentIdentity: expect.anything() })
     ])
+  })
+
+  it.each([false, true])('checks late renderer registration (token: %s)', async (tokenized) => {
+    const ptyId = 'renderer-selective-pty'
+    const paneKey = makePaneKey('host-tab', HEADLESS_LEAF_ID)
+    const { runtimeStore } = makeRuntimeStoreWithWorkspaceSession(
+      makeWorkspaceSessionWithHeadlessTerminal({})
+    )
+    const runtime = new OrcaRuntimeService(runtimeStore as never)
+    runtime.attachWindow(TEST_WINDOW_ID)
+    await runtime.syncWindowGraph(TEST_WINDOW_ID, {
+      tabs: [
+        {
+          tabId: 'host-tab',
+          worktreeId: TEST_WORKTREE_ID,
+          title: 'Renderer pane',
+          activeLeafId: HEADLESS_LEAF_ID,
+          layout: null
+        }
+      ],
+      leaves: [
+        {
+          tabId: 'host-tab',
+          worktreeId: TEST_WORKTREE_ID,
+          leafId: HEADLESS_LEAF_ID,
+          paneRuntimeId: 1,
+          ptyId
+        }
+      ]
+    })
+    const pane = { tabId: 'host-tab', leafId: HEADLESS_LEAF_ID }
+    registerLivePty(runtime, ptyId, TEST_WORKTREE_ID, null, pane)
+    const launchToken = 'renderer-launch-token'
+    const spawn = createPtyIpcSpawnState(
+      { runtime, sendPtySpawnedToRenderer: vi.fn() } as Parameters<
+        typeof createPtyIpcSpawnState
+      >[0],
+      {
+        cols: 80,
+        rows: 24,
+        worktreeId: TEST_WORKTREE_ID,
+        ...pane,
+        launchAgent: 'codex',
+        launchToken
+      }
+    )
+    spawn.result = { id: ptyId }
+    spawn.metadataLeafId = HEADLESS_LEAF_ID
+    spawn.effectiveLaunchConfig = { agentCommand: 'codex', agentArgs: '', agentEnv: {} }
+    if (tokenized) {
+      spawn.spawnEnv = spawn.spawnOptions.env = { ORCA_AGENT_LAUNCH_TOKEN: launchToken }
+    }
+    try {
+      await commitPtyIpcSpawn(spawn)
+      const incarnationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+      runtime.registerPty(ptyId, TEST_WORKTREE_ID, null, { ...pane, incarnationId })
+      const handle = runtime.getAgentStatusTerminalHandleForPaneKey(paneKey)!
+      const ack = () =>
+        assertSelectiveAckCaller(undefined, runtime, handle, `${ptyId}:${incarnationId}`, {
+          paired: false,
+          evidence: undefined
+        })
+      if (tokenized) {
+        expect(ack).toThrow('cannot verify this restored pane')
+      } else {
+        expect(ack()).toHaveProperty('pty.id', ptyId)
+      }
+    } finally {
+      unregisterPty(ptyId)
+    }
   })
 
   it.each([null, 'retained-launch'])('restores a coordinator with note %s', async (token) => {

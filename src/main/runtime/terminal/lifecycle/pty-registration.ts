@@ -6,7 +6,7 @@ import type { PtySpawnResult } from '../../../providers/pty/spawn-result'
 import type { PtyIncarnationId } from '../../../../shared/terminal/pty/lifecycle/pty-incarnation'
 import type { TuiAgent } from '../../../../shared/agent-launch/catalog/tui-agent'
 import type { SleepingAgentLaunchConfig } from '../../../../shared/agent-session/lifecycle/agent-session-resume'
-import { recordFreshLaunch, retireLaunch } from '../launch/launch-evidence'
+import { recordFreshLaunch } from '../launch/launch-evidence'
 import type { DaemonLaunchNote } from '../../../daemon/protocol/daemon-launch-note-protocol'
 import { OrcaRuntimeWithDaemonLaunchNote } from './daemon-launch-note'
 import { isValidTerminalTabId } from '../../../../shared/workspace-layout/terminal-surfaces/terminal-tab-id'
@@ -56,8 +56,8 @@ export abstract class OrcaRuntimeWithRegisterPty extends OrcaRuntimeWithDaemonLa
         incarnationId: PtyIncarnationId
         launchAgent: TuiAgent
       }
-      /** A newly started process, which runs no launch but an admitted one. */
-      freshSpawn?: true
+      /** A renderer spawn, including whether its process received a launch token. */
+      freshSpawn?: 'tokenized' | 'tokenless'
       /** A reattach, with its host's launch note; none when the host keeps no notes (an older daemon, SSH). */
       reattach?: { launchNote?: DaemonLaunchNote | null }
     },
@@ -171,7 +171,8 @@ export abstract class OrcaRuntimeWithRegisterPty extends OrcaRuntimeWithDaemonLa
       })
       this.armDaemonLaunchNote(pty)
     } else if (binding?.freshSpawn && pty.incarnationId === (binding.incarnationId ?? null)) {
-      retireLaunch(pty)
+      recordFreshLaunch(pty, { tokenInjected: binding.freshSpawn === 'tokenized' })
+      pty.launchConfig = null
     }
     this.watchLaunchComposer(ptyId, binding?.launchedAgent ?? null)
     const providerReattachLaunchIdentity = binding?.providerReattachLaunchIdentity

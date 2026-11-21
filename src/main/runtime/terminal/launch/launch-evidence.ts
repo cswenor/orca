@@ -11,7 +11,8 @@ export type LaunchEvidence =
   | {
       readonly kind: 'gone'
       readonly incarnationId: PtyIncarnationId | null
-      readonly daemonNoteAbsent?: true
+      /** A missing restart recipe does not by itself prove a tokenless caller. */
+      readonly callerToken: string | null | undefined
     }
   | {
       readonly kind: 'held'
@@ -63,13 +64,21 @@ export function holdLaunch(
   pty.launchEvidence = { kind: 'held', incarnationId, ...launch }
 }
 
-/** A freshly started process: its own launch is held, and any other process runs none. */
-export function recordFreshLaunch(pty: PtyLaunchFacts, launch: Partial<HeldLaunch> = {}): void {
-  const { agent, token, config } = launch
+/** A fresh launch only has a recipe when all launch fields are known. */
+export function recordFreshLaunch(
+  pty: PtyLaunchFacts,
+  launch: Partial<HeldLaunch> & { tokenInjected?: boolean } = {}
+): void {
+  const { agent, token, config, tokenInjected } = launch
   pty.launchEvidence =
     agent && token && config
       ? { kind: 'held', incarnationId: pty.incarnationId, agent, token, config }
-      : { kind: 'gone', incarnationId: pty.incarnationId }
+      : {
+          kind: 'gone',
+          incarnationId: pty.incarnationId,
+          callerToken:
+            token && pty.incarnationId ? token : token || tokenInjected ? undefined : null
+        }
 }
 
 /** A finished command or confirmed exit; sticky for this process until a fresh launch. */
@@ -77,7 +86,7 @@ export function retireLaunch(
   pty: PtyLaunchFacts,
   incarnationId: PtyIncarnationId | null = pty.incarnationId
 ): void {
-  pty.launchEvidence = { kind: 'gone', incarnationId }
+  pty.launchEvidence = { kind: 'gone', incarnationId, callerToken: null }
   pty.launchConfig = null
 }
 
@@ -112,7 +121,7 @@ export function recordReattachedLaunch(
     return null
   }
   if (note === null && incarnationId) {
-    pty.launchEvidence = { kind: 'gone', incarnationId, daemonNoteAbsent: true }
+    pty.launchEvidence = { kind: 'gone', incarnationId, callerToken: undefined }
     pty.launchConfig = null
     return null
   }

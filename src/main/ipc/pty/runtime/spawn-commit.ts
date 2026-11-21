@@ -32,9 +32,8 @@ export async function commitRuntimePtySpawn(ctx: RuntimePtySpawnState) {
         worktreeId: args.worktreeId,
         shellOverride: ctx.daemonShellOverride,
         rendererLaunchAuthority: null,
-        launchedAgent: null,
         // The runtime's own create records its launch once the spawn commits.
-        freshSpawn: false
+        launchedAgent: null
       },
       preAllocatedHandle: args.preAllocatedHandle,
       // Runtime spawns bypass renderer IPC; publish reverse pane lookup for hooks and cleanup.

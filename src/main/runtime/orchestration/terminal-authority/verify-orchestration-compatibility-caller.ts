@@ -127,16 +127,9 @@ export abstract class OrcaRuntimeWithVerifyOrchestrationCompatibilityCaller exte
     if (!pty?.connected) {
       return undefined
     }
-    if (pty.launchToken && pty.launchIncarnationId === pty.incarnationId) {
-      return pty.launchToken
-    }
     // Reattach re-proves daemon-held launch evidence against the incarnation and foreground agent.
     if (evidence && evidence.kind !== 'unknown' && evidence.incarnationId === pty.incarnationId) {
-      return evidence.kind === 'held'
-        ? evidence.token
-        : evidence.daemonNoteAbsent || pty.launchToken
-          ? undefined
-          : null
+      return evidence.kind === 'held' ? evidence.token : evidence.callerToken
     }
     return undefined
   }
