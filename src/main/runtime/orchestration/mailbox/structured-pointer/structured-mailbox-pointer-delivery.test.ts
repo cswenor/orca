@@ -291,8 +291,10 @@ describe('structured mailbox delivery: each message whole', () => {
     const h = harness({ busy: true })
     h.receive('m1')
     await h.deliver()
+    const message = h.mail.get('m1')!
+    const ancestor = message.to_handle
     const successor = 'dispatch:d2'
-    h.mail.get('m1')!.to_handle = successor
+    message.to_handle = successor
     const entered = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
     const withdraw = vi.mocked(h.host.withdraw).getMockImplementation()!
@@ -302,13 +304,18 @@ describe('structured mailbox delivery: each message whole', () => {
       return withdraw(sessionId, operationId)
     })
     let finished = false
-    const cleanup = Promise.resolve(h.delivery.withdrawStale([successor, mailbox], true)).then(
+    const cleanup = Promise.resolve(h.delivery.withdrawStale([successor, ancestor], true)).then(
       () => {
         finished = true
       }
     )
     try {
-      await entered.promise
+      await Promise.race([
+        entered.promise,
+        cleanup.then(() => {
+          throw new Error('Startup cleanup finished before withdrawing the ancestor card')
+        })
+      ])
       await flush()
       expect(finished).toBe(false)
       expect(h.records.size).toBe(1)
