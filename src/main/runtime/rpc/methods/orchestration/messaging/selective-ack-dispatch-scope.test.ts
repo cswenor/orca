@@ -5,14 +5,15 @@ import { createOrchestrationRpcHarness } from '../rpc-test-harness'
 const harness = createOrchestrationRpcHarness()
 afterEach(() => harness.cleanup())
 
-it.each([true, false])(
-  'refuses conflicting stable-pane owners with caller pane present: %s',
-  async (withCallerPane) => {
+it.each(['caller pane', 'recorded pane', 'recorded handle'] as const)(
+  'refuses conflicting Dispatch owners on %s',
+  async (conflict) => {
     const { db, runtime, ctx } = harness.setup()
     const leaf = '33333333-3333-4333-9333-333333333333'
-    const terminal = withCallerPane ? 'term_reminted' : 'term_second'
+    const terminal = conflict === 'recorded pane' ? 'term_second' : 'term_reminted'
+    const currentPane = `tab_current:${leaf}`
     vi.mocked(runtime.getTerminalPaneKey).mockReturnValue(
-      withCallerPane ? `tab_current:${leaf}` : null
+      conflict === 'recorded pane' ? null : currentPane
     )
     const seed = (suffix: string, paneKey: string) => {
       const task = db.createTask({ spec: `task ${suffix}` })
@@ -24,12 +25,17 @@ it.each([true, false])(
         subject: `mail ${suffix}`
       })
     }
-    const other = seed('first', `tab_first:${leaf}`)
+    const other = seed('first', conflict === 'recorded handle' ? 'tab_first' : `tab_first:${leaf}`)
     const newest = seed('second', 'tab_second:44444444-4444-4444-8444-444444444444')
     // Model conflicting restored records, which current Dispatch creation already prevents.
     db.db
       .prepare('UPDATE dispatch_contexts SET assignee_pane_key = ? WHERE assignee_handle = ?')
-      .run(`tab_current:${leaf}`, 'term_second')
+      .run(currentPane, 'term_second')
+    if (conflict === 'recorded handle') {
+      db.db
+        .prepare('UPDATE dispatch_contexts SET assignee_handle = ? WHERE assignee_handle = ?')
+        .run('term_second', 'term_first')
+    }
     await expect(
       harness.call('orchestration.ackMessages', { terminal, ackIds: [newest.id] }, ctx)
     ).rejects.toMatchObject({

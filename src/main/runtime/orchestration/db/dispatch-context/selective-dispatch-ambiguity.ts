@@ -7,6 +7,7 @@ export function hasCompetingActiveDispatch(
   db: OrchestrationDb,
   dispatchId: string,
   handle: string,
+  recordedHandle: string | null,
   paneKey: string | undefined
 ): boolean {
   const leafId = paneKey ? parsePaneKey(paneKey)?.leafId : undefined
@@ -15,10 +16,10 @@ export function hasCompetingActiveDispatch(
       .prepare(
         `SELECT 1 FROM dispatch_contexts
          WHERE status IN ('pending', 'dispatched') AND id <> ?
-           AND (assignee_handle = ? OR assignee_pane_key = ? OR
+           AND (assignee_handle IN (?, ?) OR assignee_pane_key = ? OR
              (instr(assignee_pane_key, ':') > 1 AND ${DISPATCH_PANE_KEY_MATCH_SUFFIX_SQL} = ?))
          LIMIT 1`
       )
-      .get(dispatchId, handle, paneKey ?? null, leafId ?? null) !== undefined
+      .get(dispatchId, handle, recordedHandle, paneKey ?? null, leafId ?? null) !== undefined
   )
 }
