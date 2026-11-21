@@ -712,13 +712,35 @@ it('enforces ordinary residual precedence while selecting only eligible messages
     { terminal: 'term_lead', ack: delivery.delivery.id },
     ctx
   )
-  await expect(
-    harness.call(
-      'orchestration.ackMessages',
-      { terminal: 'term_lead', ackIds: ['msg_prebind'] },
-      ctx
-    )
-  ).resolves.toMatchObject({ markedIds: ['msg_prebind'] })
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+  const residualAck = (replayOnly = false) =>
+    dispatcher.dispatch({
+      id: 'rpc_residual_ack',
+      authToken: 'test',
+      method: 'orchestration.ackMessages',
+      params: { terminal: 'term_lead', ackIds: ['msg_prebind'], replayOnly },
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+      orchestrationRequestId: 'residual_ack'
+    })
+  await expect(residualAck()).resolves.toMatchObject({
+    ok: true,
+    result: { markedIds: ['msg_prebind'] }
+  })
+  const later = db.insertMessage({
+    from: 'term_child',
+    to: `run:${run.id}`,
+    runId: run.id,
+    subject: 'later child status'
+  })
+  expect(
+    db.getOrCreateRunDelivery({ runId: run.id, consumerGeneration: run.consumer_generation })
+      ?.messages
+  ).toMatchObject([{ id: later.id }])
+  await expect(residualAck(true)).resolves.toMatchObject({
+    ok: true,
+    result: { markedIds: ['msg_prebind'], mutation: { replayed: true } }
+  })
+  expect(db.getMessageById(later.id)?.read).toBe(0)
 })
 
 it('rejects the wrong owning Run and keeps a receipt on the original Dispatch generation', async () => {

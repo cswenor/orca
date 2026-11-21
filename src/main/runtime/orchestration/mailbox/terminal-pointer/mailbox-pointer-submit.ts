@@ -117,6 +117,7 @@ export function submitOrchestrationMailboxPointer(
     })
     .finally(() => {
       if (deferredUntilIdle) {
+        input.flight.startupCompletion?.resolve()
         return
       }
       let released = false

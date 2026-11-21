@@ -8,9 +8,12 @@ import { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import {
   createBoundRun,
   createRuntime,
+  driveToLiveIdle,
+  pointerCount,
   PANE_KEY,
   TERMINAL_HANDLE
 } from '../../../../orchestration/mailbox/terminal-pointer/orchestration-mailbox-notification-test-harness'
+import { WRITE_ACCEPTED } from '../../../../../../shared/terminal/pty/lifecycle/pty-write-settlement'
 
 const harness = createOrchestrationRpcHarness()
 afterEach(() => harness.cleanup())
@@ -206,6 +209,61 @@ it('waits for every PTY routing page before acknowledging direct-addressed Run m
   ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
   expect(db.getMessageById(selected.id)).toMatchObject({ to_handle: mailbox, read: 1 })
   expect(db.getUnreadMessages(terminal.handle)).toEqual([])
+})
+
+it('waits for restored PTY pointer text and Enter to settle before marking mail', async () => {
+  vi.useFakeTimers()
+  const db = new OrchestrationDb(':memory:')
+  const text = Promise.withResolvers<typeof WRITE_ACCEPTED>()
+  const enter = Promise.withResolvers<typeof WRITE_ACCEPTED>()
+  try {
+    const { runtime, write } = await createRuntime(db)
+    await driveToLiveIdle(runtime)
+    runtime.setPtyController({
+      write,
+      writeWithSettlement: (ptyId, data) => {
+        write(ptyId, data)
+        return data === '\r' ? enter.promise : text.promise
+      },
+      kill: vi.fn(),
+      getForegroundProcess: async () => null
+    })
+    const run = createBoundRun(db, 'Restored PTY')
+    const selected = db.insertMessage({
+      from: 'term_sender',
+      to: `run:${run.id}`,
+      runId: run.id,
+      subject: 'Restored while terminal is idle'
+    })
+    runtime.setOrchestrationDb(db)
+    const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+    const result = dispatcher.dispatch({
+      id: 'rpc_restored_pointer',
+      authToken: 'test',
+      method: 'orchestration.ackMessages',
+      params: { terminal: TERMINAL_HANDLE, ackIds: [selected.id] },
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+      orchestrationRequestId: 'restored_pointer'
+    })
+    await vi.advanceTimersByTimeAsync(2_001)
+    expect(pointerCount(write)).toBe(1)
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+    text.resolve(WRITE_ACCEPTED)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(write.mock.calls.filter(([, data]) => data === '\r')).toHaveLength(1)
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+    enter.resolve(WRITE_ACCEPTED)
+    await expect(result).resolves.toMatchObject({
+      ok: true,
+      result: { markedIds: [selected.id] }
+    })
+    expect(db.getMessageById(selected.id)).toMatchObject({ read: 1, pointer_enter_pending: 0 })
+  } finally {
+    text.resolve(WRITE_ACCEPTED)
+    enter.resolve(WRITE_ACCEPTED)
+    vi.useRealTimers()
+    db.close()
+  }
 })
 
 it.each(['headless', 'window', 'reload', 'explicit'])('marks %s mail', async (mode) => {

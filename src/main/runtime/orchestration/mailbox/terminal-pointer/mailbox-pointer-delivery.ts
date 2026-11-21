@@ -36,8 +36,8 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
   deliverForHandle(
     handle: string,
     reservedTypes?: ReadonlySet<string>,
-    waitForRouting = false
-  ): Promise<ReadonlySet<string>> | undefined {
+    waitForRecovery = false
+  ): { routing?: Promise<ReadonlySet<string>>; flight?: Promise<void> } | undefined {
     try {
       const terminal = this.deps.deliveryTarget.resolveTerminal(handle)
       // Skip ownership resolution, and the reconciliation it schedules, for a terminal deliver() would refuse.
@@ -48,9 +48,13 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
       if (mailboxHandle) {
         this.deliver(terminal, { mailboxHandle, reservedTypes })
       }
-      return waitForRouting
-        ? this.deps.mailboxOwner.pendingDirectReconciliation(terminal.ptyId)
-        : undefined
+      if (!waitForRecovery) {
+        return undefined
+      }
+      return {
+        routing: this.deps.mailboxOwner.pendingDirectReconciliation(terminal.ptyId),
+        flight: this.state.whenFlightSettledOrParked(terminal.ptyId)
+      }
     } catch {
       // Persisted mail remains available to explicit check or the terminal's next input edge.
       return undefined
@@ -169,6 +173,7 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
   retirePty(ptyId: string): void {
     this.coldParkedPtys.delete(ptyId)
     const { flight, releasedMailboxes } = this.state.retirePty(ptyId)
+    flight?.startupCompletion?.resolve()
     if (flight?.enterTimer != null) {
       clearTimeout(flight.enterTimer)
     }

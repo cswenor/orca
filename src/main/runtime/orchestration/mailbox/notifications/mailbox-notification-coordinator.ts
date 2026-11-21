@@ -39,18 +39,21 @@ export class OrchestrationMailboxNotificationCoordinator<
     waitForRedrives = false
   ): Promise<void> | undefined {
     const { mailboxOwner, pointerDelivery, structuredPointerDelivery } = this.deps
-    const routing = structuredPointerDelivery?.deliverForHandle(handle, reservedTypes)
+    const terminal = structuredPointerDelivery?.deliverForHandle(handle, reservedTypes)
       ? undefined
       : pointerDelivery.deliverForHandle(handle, reservedTypes, waitForRedrives)
-    if (!waitForRedrives || !structuredPointerDelivery) {
+    if (!waitForRedrives) {
       return undefined
     }
-    const structured = structuredPointerDelivery.whenIdle(handle)
-    if (!routing) {
-      return structured
+    const pending = [terminal?.flight, structuredPointerDelivery?.whenIdle(handle)]
+    if (terminal?.routing) {
+      pending.push(
+        structuredPointerDelivery
+          ? mailboxOwner.waitForRoutingRedrives(terminal.routing, structuredPointerDelivery)
+          : terminal.routing.then(() => undefined)
+      )
     }
-    const routed = mailboxOwner.waitForRoutingRedrives(routing, structuredPointerDelivery)
-    return structured ? Promise.all([structured, routed]).then(() => undefined) : routed
+    return Promise.all(pending).then(() => undefined)
   }
 
   deliverForTerminal(terminal: OrchestrationMailboxTerminal): void {

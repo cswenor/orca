@@ -171,6 +171,9 @@ function finishPointerWriteAndStageEnter<TWaiter extends OrchestrationMessageWai
     }
     delayedSettle = true
     deferredEnter?.()
+    if (flight.deferredUntilIdle) {
+      flight.startupCompletion?.resolve()
+    }
   } finally {
     if (!delayedSettle) {
       args.settle(ptyId, flight)

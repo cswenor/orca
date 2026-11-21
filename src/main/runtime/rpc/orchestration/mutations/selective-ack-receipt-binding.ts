@@ -220,9 +220,9 @@ function selectiveAckReceiptBinding(
       })
     : undefined
   let residual: [string, number] | undefined
+  // Fresh selections enforce Delivery precedence in checkRunPendingMail, not in the receipt key.
   if (
     dispatch &&
-    !db.hasOutstandingMailboxDelivery(`run:${currentRun.id}`) &&
     callerHoldsResidualDispatch(
       runtime,
       db,

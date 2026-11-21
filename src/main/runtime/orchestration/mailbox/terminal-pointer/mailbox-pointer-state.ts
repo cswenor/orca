@@ -4,6 +4,7 @@ export type OrchestrationMailboxDeliveryFlight = {
   submitEnter: (() => void) | null
   deferredUntilIdle: boolean
   idleObservedWhileDeferred: boolean
+  startupCompletion?: PromiseWithResolvers<void>
   /** The incarnation that staged this flight, so retirement can name the rows it owns. */
   processIncarnation?: string
 }
@@ -23,6 +24,15 @@ export class OrchestrationMailboxPointerState {
 
   hasFlight(ptyId: string): boolean {
     return this.flightsByPtyId.has(ptyId)
+  }
+
+  /** A parked pointer waits for a future input edge, not the current startup pass. */
+  whenFlightSettledOrParked(ptyId: string): Promise<void> | undefined {
+    const flight = this.flightsByPtyId.get(ptyId)
+    if (!flight || (flight.deferredUntilIdle && flight.submitEnter)) {
+      return undefined
+    }
+    return (flight.startupCompletion ??= Promise.withResolvers<void>()).promise
   }
 
   beginFlight(ptyId: string): OrchestrationMailboxDeliveryFlight {
@@ -52,6 +62,9 @@ export class OrchestrationMailboxPointerState {
     }
     flight.deferredUntilIdle = true
     flight.idleObservedWhileDeferred = false
+    if (flight.submitEnter) {
+      flight.startupCompletion?.resolve()
+    }
     return true
   }
 
@@ -79,6 +92,7 @@ export class OrchestrationMailboxPointerState {
       return null
     }
     this.flightsByPtyId.delete(ptyId)
+    flight.startupCompletion?.resolve()
     const parked = this.parkedDeliveriesByPtyId.get(ptyId) ?? null
     this.parkedDeliveriesByPtyId.delete(ptyId)
     return parked
