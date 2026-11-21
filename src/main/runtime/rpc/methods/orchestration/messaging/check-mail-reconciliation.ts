@@ -291,7 +291,12 @@ export class CheckMailReconciliation {
           return args.wake ? args.wake.share(key, take) : take()
         },
         finalize: (messages) => {
-          const taken = this.db.finalizeMailboxDelivery({ ...args.mailbox, claim, messages })
+          const taken = this.db.finalizeMailboxDelivery({
+            ...args.mailbox,
+            claim,
+            messages,
+            preserveAcknowledgedEmpty: args.wake !== undefined
+          })
           if (!taken || (!args.wake && taken.messages.length === 0)) {
             return undefined
           }

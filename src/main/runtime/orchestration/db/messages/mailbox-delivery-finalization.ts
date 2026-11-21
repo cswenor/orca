@@ -11,6 +11,7 @@ export function finalizeMailboxDelivery(
   params: MailboxDeliveryParams & {
     claim: MailboxDeliveryBatch
     messages: MessageRow[]
+    preserveAcknowledgedEmpty?: boolean
   }
 ): MailboxDeliveryBatch | undefined {
   if (!this.db.isTransaction) {
@@ -31,7 +32,10 @@ export function finalizeMailboxDelivery(
     )
   }
   if (raw.status === 'acknowledged') {
-    return undefined
+    // A competing check may commit this exact empty claim before a shared wake publishes it.
+    return params.preserveAcknowledgedEmpty && raw.message_ids === '[]'
+      ? { delivery: exposeDeliveryTimestamps(raw), messages: [], replayed: true }
+      : undefined
   }
   if (raw.message_ids !== params.claim.delivery.message_ids) {
     throw new OrchestrationError(
