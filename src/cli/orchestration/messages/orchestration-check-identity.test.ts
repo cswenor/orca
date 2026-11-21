@@ -38,13 +38,11 @@ describe('orchestration check identity', () => {
     }
   })
 
-  const invokeCheck = (flags: Map<string, string | boolean>, json = true, isRemote = false) =>
-    ORCHESTRATION_HANDLERS['orchestration check']({
-      flags,
-      client: { call: callMock, isRemote },
-      cwd: '/tmp/repo',
-      json
-    } as never)
+  const invokeCheck = (flags: Map<string, string | boolean>, json = true, isRemote = false) => {
+    const client = new RuntimeClient('/tmp/repo', undefined, null, isRemote ? 'peer' : null)
+    client.call = callMock
+    return ORCHESTRATION_HANDLERS['orchestration check']({ flags, client, cwd: '/tmp/repo', json })
+  }
 
   it('does not issue any check RPC when the execution host lacks selective ack', async () => {
     await expect(invokeCheck(new Map([['ack-ids', 'msg_selected']]))).rejects.toMatchObject({
@@ -119,11 +117,13 @@ describe('orchestration check identity', () => {
     async (capable) => {
       vi.stubEnv('ORCA_AGENT_LAUNCH_TOKEN', 'test-launch')
       const local = vi.spyOn(RuntimeClient.prototype, 'call')
+      const envelope = { id: 'local-probe', ok: true, _meta: { runtimeId: 'local' } } as const
       local.mockResolvedValueOnce({
+        ...envelope,
         result: { capabilities: capable ? [ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY] : [] }
-      } as never)
+      })
       if (capable) {
-        local.mockResolvedValueOnce({ result: { caller: null, terminal: true } } as never)
+        local.mockResolvedValueOnce({ ...envelope, result: { caller: null, terminal: true } })
       }
       await expect(
         invokeCheck(

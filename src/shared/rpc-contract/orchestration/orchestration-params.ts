@@ -27,6 +27,8 @@ export function getLifecycleGroupRecipientError(type: DispatchMutationMessageTyp
   return `${type} messages belong to one exact Dispatch and cannot target a group address.`
 }
 
+export const CallerShowParams = z.object({ readOnly: z.literal(true).optional() })
+
 export const CheckParams = z
   .object({
     terminal: OptionalString,

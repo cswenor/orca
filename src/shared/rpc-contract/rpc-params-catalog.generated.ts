@@ -648,6 +648,7 @@ import {
 import {
   AckMessagesParams,
   AskParams,
+  CallerShowParams,
   CheckParams,
   DispatchParams,
   DispatchShowParams,
@@ -1837,7 +1838,7 @@ export const RPC_PARAMS_BY_METHOD = {
   'orchestration.ackMessages': AckMessagesParams,
   'orchestration.approvalAnswer': ApprovalAnswerParams,
   'orchestration.ask': AskParams,
-  'orchestration.callerShow': null,
+  'orchestration.callerShow': CallerShowParams,
   'orchestration.check': CheckParams,
   'orchestration.crewSubscribe': CrewSubscribeParams,
   'orchestration.dispatch': DispatchParams,
