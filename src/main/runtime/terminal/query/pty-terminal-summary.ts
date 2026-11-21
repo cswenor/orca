@@ -297,21 +297,6 @@ export abstract class OrcaRuntimeWithBuildPtyTerminalSummary extends OrcaRuntime
       limit: opts.limit
     })
   }
-  getExistingTerminalHandleForPaneKey(paneKey: string): string | undefined {
-    const pane = parsePaneKey(paneKey)
-    if (!pane) {
-      return undefined
-    }
-    const pty = this.getPtyRecordForPaneKey(paneKey)
-    if (!pty?.connected) {
-      return undefined
-    }
-    const handle =
-      this.handleByLeafKey.get(this.getLeafKey(pane.tabId, pane.leafId)) ??
-      this.handleByPtyId.get(pty.ptyId)
-    const live = handle && this.getLivePtyForHandle(handle, undefined, true)
-    return live && live.pty === pty ? handle : undefined
-  }
 
   getTerminalHandleForPaneKey(
     paneKey: string,

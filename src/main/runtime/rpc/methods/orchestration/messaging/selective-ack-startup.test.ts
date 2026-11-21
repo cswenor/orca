@@ -208,15 +208,23 @@ it('waits for every PTY routing page before acknowledging direct-addressed Run m
   expect(db.getUnreadMessages(terminal.handle)).toEqual([])
 })
 
-it.each([false, true])('marks pane mail without rebinding (reload: %s)', async (reloading) => {
+it.each(['headless', 'window', 'reload', 'explicit'])('marks %s mail', async (mode) => {
   const db = new OrchestrationDb(':memory:')
   try {
-    const { runtime, write } = await createRuntime(db, { launchAgent: null, headless: !reloading })
+    const { runtime, write } = await createRuntime(db, {
+      launchAgent: null,
+      headless: mode === 'headless'
+    })
+    const handle =
+      mode === 'window' ? runtime.getTerminalHandleForPaneKey(PANE_KEY) : TERMINAL_HANDLE
+    expect(handle).toBeTruthy()
+    const reloading = mode === 'reload' || mode === 'explicit'
     if (reloading) {
       expect(runtime.markRendererReloading(1)).not.toBeNull()
       expect(runtime['handles'].has(TERMINAL_HANDLE)).toBe(false)
+      vi.spyOn(runtime.startupWorkerAuthority, 'isPending').mockReturnValue(true)
     }
-    expect(runtime.getExistingTerminalHandleForPaneKey(PANE_KEY)).toBe(TERMINAL_HANDLE)
+    expect(runtime.getExistingTerminalHandleForPaneKey(PANE_KEY)).toBe(handle)
     const run = createBoundRun(db, 'Pane-only caller')
     const selected = db.insertMessage({
       from: 'term_sender',
@@ -228,7 +236,10 @@ it.each([false, true])('marks pane mail without rebinding (reload: %s)', async (
       id: 'rpc_pane_caller',
       authToken: 'test',
       method: 'orchestration.ackMessages',
-      params: { terminalPaneKey: PANE_KEY, ackIds: [selected.id] },
+      params: {
+        ...(mode === 'explicit' ? { terminal: handle } : { terminalPaneKey: PANE_KEY }),
+        ackIds: [selected.id]
+      },
       orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
       orchestrationRequestId: 'pane_caller'
     })

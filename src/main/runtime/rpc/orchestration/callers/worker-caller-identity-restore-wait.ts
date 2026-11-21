@@ -2,6 +2,7 @@ import type { OrcaRuntimeService } from '../../../orca-runtime'
 import type { RpcRequest } from '../../core'
 import type { OrchestrationCallerField } from '../../methods/orchestration/access/orchestration-method-access'
 import { isDispatchMutationMessageType } from '../../../../../shared/rpc-contract/orchestration/orchestration-params'
+import { isSelectiveAckRequest } from './selective-ack-caller'
 
 // The calls a worker makes as itself, each fenced on its terminal's pane and process.
 const WORKER_REPORT_METHODS: ReadonlySet<string> = new Set([
@@ -35,11 +36,12 @@ export function waitForRestoredWorkerCallerIdentity(
       ? typeof params.type !== 'string' || !isDispatchMutationMessageType(params.type)
       : request.method === 'orchestration.check' && params.wait === true
   const terminal = typeof handle === 'string' ? handle : undefined
+  const readOnly = isSelectiveAckRequest(request)
   return terminal &&
     !skipsIdentityCheck &&
     runtime.startupWorkerAuthority.isPending() &&
-    (runtime.getTerminalPaneKey(terminal) === null ||
-      runtime.getTerminalProcessIncarnation(terminal) === null)
+    (runtime.getTerminalPaneKey(terminal, undefined, readOnly) === null ||
+      runtime.getTerminalProcessIncarnation(terminal, undefined, readOnly) === null)
     ? runtime.startupWorkerAuthority.wait(signals)
     : null
 }
