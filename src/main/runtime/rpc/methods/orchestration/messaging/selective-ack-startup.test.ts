@@ -478,6 +478,56 @@ it('joins the PTY notice created by restored worker recovery', async () => {
   }
 })
 
+it('does not join a different mailbox pointer when repointing a settled recovery notice', async () => {
+  vi.useFakeTimers()
+  const db = new OrchestrationDb(':memory:')
+  const unrelatedWrite = Promise.withResolvers<typeof WRITE_ACCEPTED>()
+  try {
+    const { runtime } = await createRuntime(db)
+    await driveToLiveIdle(runtime)
+    const write = vi.fn((_ptyId: string, _data: string) => true)
+    const unrelatedRun = createBoundRun(db, 'Independent mailbox on the same PTY')
+    const restoredRun = createBoundRun(db, 'Recovery notice mailbox')
+    const unrelatedMailbox = `run:${unrelatedRun.id}`
+    const unrelatedFlag = `--run ${unrelatedRun.id}`
+    const noticeMailbox = `run:${restoredRun.id}`
+    runtime.setPtyController({
+      write,
+      writeWithSettlement: (ptyId, data) => {
+        write(ptyId, data)
+        return data.includes(unrelatedFlag) ? unrelatedWrite.promise : WRITE_ACCEPTED
+      },
+      kill: vi.fn(),
+      getForegroundProcess: async () => null
+    })
+    db.insertMessage({
+      from: 'term_sender',
+      to: unrelatedMailbox,
+      subject: 'Independent later mail'
+    })
+    const notice = db.insertMessage({
+      from: 'term_sender',
+      to: noticeMailbox,
+      subject: 'Recovery notice'
+    })
+    const recovered = vi.fn()
+    void runtime.notifyRestoredMessageArrived(noticeMailbox, notice.type, notice.id).then(recovered)
+    await vi.advanceTimersByTimeAsync(750)
+    expect(pointerCount(write)).toBe(1)
+    expect(write.mock.calls.at(-1)).toEqual([PTY_ID, '\r'])
+    runtime.deliverPendingMessagesForHandle(unrelatedMailbox)
+    await vi.advanceTimersByTimeAsync(1_300)
+    expect(pointerCount(write)).toBe(2)
+    expect(write.mock.calls.at(-1)?.[1]).toContain(unrelatedFlag)
+    expect(recovered).toHaveBeenCalledOnce()
+  } finally {
+    unrelatedWrite.resolve(WRITE_ACCEPTED)
+    await vi.advanceTimersByTimeAsync(500)
+    vi.useRealTimers()
+    db.close()
+  }
+})
+
 it('leaves worker follow-up markers created after startup to ordinary delivery', async () => {
   const { db, runtime } = harness.setup(false)
   const run = createBoundRun(db, 'Report arrives after startup was scheduled')

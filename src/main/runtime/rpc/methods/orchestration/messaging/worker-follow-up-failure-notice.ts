@@ -16,8 +16,7 @@ export function noticeUnreadMailNotContinued(
   if (!dispatch) {
     return
   }
-  let recovery: Promise<void> | undefined
-  escalateWorkerFailure(
+  const notice = escalateWorkerFailure(
     db,
     dispatch,
     {
@@ -33,13 +32,9 @@ export function noticeUnreadMailNotContinued(
       }),
       payload: { dispatchId, reason }
     },
-    (handle, type) => {
-      if (restoring) {
-        recovery = runtime.notifyRestoredMessageArrived(handle, type)
-      } else {
-        runtime.notifyMessageArrived(handle, type)
-      }
-    }
+    restoring ? undefined : (handle, type) => runtime.notifyMessageArrived(handle, type)
   )
-  return recovery
+  return restoring && notice
+    ? runtime.notifyRestoredMessageArrived(notice.to_handle, notice.type, notice.id)
+    : undefined
 }

@@ -28,11 +28,16 @@ export class OrchestrationMailboxPointerState {
   }
 
   /** A parked pointer waits for a future input edge, not the current startup pass. */
-  whenFlightSettledOrParked(ptyId: string, through: number): Promise<boolean> | undefined {
+  whenFlightSettledOrParked(
+    ptyId: string,
+    through: number,
+    messageId?: string
+  ): Promise<boolean> | undefined {
     const flight = this.flightsByPtyId.get(ptyId)
     if (
       !flight ||
       flight.oldestSequence > through ||
+      (messageId !== undefined && !flight.stagedMessageIds.includes(messageId)) ||
       (flight.deferredUntilIdle && flight.submitEnter)
     ) {
       return undefined

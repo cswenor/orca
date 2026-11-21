@@ -6,6 +6,7 @@ export class MailPointerRepointScheduler {
     string,
     { through: number; completion: PromiseWithResolvers<void> }
   >()
+  private readonly repointed = new Map<string, PromiseWithResolvers<void>>()
 
   constructor(
     private readonly repoint: (handle: string, through?: number) => void | Promise<void>
@@ -22,7 +23,10 @@ export class MailPointerRepointScheduler {
       this.timersByHandle.delete(handle)
       const pending = this.completions.get(handle)
       this.completions.delete(handle)
+      const repointed = this.repointed.get(handle)
+      this.repointed.delete(handle)
       const redrive = this.repoint(handle, pending?.through)
+      repointed?.resolve()
       if (pending) {
         const { completion } = pending
         if (redrive) {
@@ -42,10 +46,22 @@ export class MailPointerRepointScheduler {
       pending = { through, completion: Promise.withResolvers<void>() }
       this.completions.set(handle, pending)
     } else {
-      // One timer can be queued for restored mail before a restored worker queues its notice.
       pending.through = Math.max(pending.through, through)
     }
     return pending.completion.promise
+  }
+
+  /** Observe the timer's synchronous dispatch without attaching its other recovery obligations. */
+  whenRepointed(handle: string): Promise<void> | undefined {
+    if (!this.timersByHandle.has(handle)) {
+      return undefined
+    }
+    let pending = this.repointed.get(handle)
+    if (!pending) {
+      pending = Promise.withResolvers<void>()
+      this.repointed.set(handle, pending)
+    }
+    return pending.promise
   }
 
   /** Handles still awaiting a repoint; a quiet scheduler holds none. */
@@ -62,5 +78,9 @@ export class MailPointerRepointScheduler {
       pending.completion.resolve()
     }
     this.completions.clear()
+    for (const pending of this.repointed.values()) {
+      pending.resolve()
+    }
+    this.repointed.clear()
   }
 }

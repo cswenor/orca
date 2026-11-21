@@ -21,7 +21,7 @@ export function escalateWorkerFailure(
   db: OrchestrationDb,
   dispatch: Pick<DispatchContextRow, 'id' | 'run_id' | 'task_id'>,
   escalation: WorkerFailureEscalation,
-  notify: (handle: string, messageType: string) => void
+  notify?: (handle: string, messageType: string) => void
 ): MessageRow | null {
   try {
     if (escalation.id && db.getMessageById?.(escalation.id)) {
@@ -62,7 +62,7 @@ export function escalateWorkerFailure(
       // A peer Run's queue then carries the Dispatch home with it, as it does a worker's own mail.
       senderDispatchId: dispatch.id
     })
-    notify(message.to_handle, message.type)
+    notify?.(message.to_handle, message.type)
     return message
   } catch (error) {
     console.warn('[orchestration] failed to escalate worker failure', {

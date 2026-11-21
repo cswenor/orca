@@ -86,9 +86,9 @@ export class OrchestrationMailboxDeliveryTarget {
         }
   }
 
-  whenProbeIdle(ptyId: string, through: number): Promise<void> | undefined {
+  whenProbeIdle(ptyId: string, through: number, mailbox?: string): Promise<void> | undefined {
     const probe = this.probeDeferredMailboxes.get(ptyId)
-    return probe && probe.oldestSequence <= through
+    return probe && probe.oldestSequence <= through && (!mailbox || probe.mailboxes.has(mailbox))
       ? (probe.completion ??= Promise.withResolvers<void>()).promise
       : undefined
   }

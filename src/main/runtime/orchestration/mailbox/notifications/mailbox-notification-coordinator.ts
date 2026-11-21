@@ -1,4 +1,5 @@
 import type { OrchestrationDb } from '../../db/orchestration-db'
+import type { MessageRow } from '../../db/orchestration-records'
 import type {
   OrchestrationMailboxOwner,
   OrchestrationMailboxTerminal,
@@ -71,16 +72,37 @@ export class OrchestrationMailboxNotificationCoordinator<
     })
   }
 
+  waitForNoticeIdle(
+    id: string,
+    previousRouting?: Promise<ReadonlySet<string>>
+  ): Promise<void> | undefined {
+    const notice = this.deps.getDb()?.getMessageById(id)
+    return notice && !notice.read
+      ? this.waitForRecovery(notice.to_handle, notice.sequence, undefined, previousRouting, notice)
+      : undefined
+  }
+
   private waitForRecovery(
     handle: string,
     through: number,
-    pending = this.deps.pointerDelivery.pendingRecovery(handle, through),
-    previousRouting?: Promise<ReadonlySet<string>>
+    terminal?: ReturnType<OrchestrationMailboxPointerDelivery<TWaiter>['pendingRecovery']>,
+    previousRouting?: Promise<ReadonlySet<string>>,
+    notice?: MessageRow
   ): Promise<void> | undefined {
+    const pointer = this.deps.pointerDelivery
+    const pending = notice
+      ? pointer.pendingNoticeRecovery(notice)
+      : (terminal ?? pointer.pendingRecovery(handle, through))
+    const next = (routing?: Promise<ReadonlySet<string>>) =>
+      notice
+        ? this.waitForNoticeIdle(notice.id, routing)
+        : this.waitForRecovery(handle, through, undefined, routing)
     const { routing, flight } = pending ?? {}
     const routed =
       routing && routing !== previousRouting
-        ? this.waitForRoutingRedrives(routing, through)
+        ? notice
+          ? routing.then(() => next(routing))
+          : this.waitForRoutingRedrives(routing, through)
         : undefined
     const structured = this.deps.structuredPointerDelivery?.whenIdle(handle, through)
     const settling = structured ? Promise.all([flight, structured]).then(() => true) : flight
@@ -91,12 +113,7 @@ export class OrchestrationMailboxNotificationCoordinator<
         return
       }
       await Promise.resolve()
-      return this.waitForRecovery(
-        handle,
-        through,
-        this.deps.pointerDelivery.pendingRecovery(handle, through),
-        routing
-      )
+      return next(routing)
     })
     return routed && successor
       ? Promise.all([routed, successor]).then(() => undefined)
@@ -133,11 +150,7 @@ export class OrchestrationMailboxNotificationCoordinator<
     )
   }
 
-  notifyMessageArrived(
-    handle: string,
-    messageType?: string,
-    through?: number
-  ): Promise<void> | undefined {
+  notifyMessageArrived(handle: string, messageType?: string): void {
     const { mailboxHandle, forwarded, directTypes } = this.resolveArrivedMailboxes(handle)
     this.notifyForwarded(forwarded)
     if (!mailboxHandle) {
@@ -158,11 +171,6 @@ export class OrchestrationMailboxNotificationCoordinator<
         waiters ? [...waiters].flatMap((waiter) => waiter.typeFilter ?? []) : []
       )
       // Let a check awakened in this drain mark its rows read before the push re-reads them.
-      if (through !== undefined) {
-        return Promise.resolve().then(() =>
-          this.deliverForHandle(mailboxHandle, reservedTypes, through)
-        )
-      }
       queueMicrotask(() => this.deps.deliverForHandle(mailboxHandle, reservedTypes))
       return
     }

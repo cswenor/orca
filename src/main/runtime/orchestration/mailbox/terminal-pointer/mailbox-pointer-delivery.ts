@@ -1,4 +1,5 @@
 import type { PointerDeliveryDependencies } from './mailbox-pointer-delivery-contract'
+import type { MessageRow } from '../../db/orchestration-records'
 import {
   hasUnfilteredOrchestrationWaiter,
   selectOrchestrationPointerBatch,
@@ -62,18 +63,32 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
     return terminal ? this.pendingPtyRecovery(terminal.ptyId, through, handle) : undefined
   }
 
+  pendingNoticeRecovery(notice: MessageRow): ReturnType<typeof this.pendingPtyRecovery> {
+    const terminal = this.deps.deliveryTarget.resolveTerminal(notice.to_handle)
+    return terminal
+      ? this.pendingPtyRecovery(terminal.ptyId, notice.sequence, notice.to_handle, notice)
+      : undefined
+  }
+
   private pendingPtyRecovery(
     ptyId: string,
     through: number,
-    mailbox: string
+    mailbox: string,
+    notice?: MessageRow
   ):
     | { mailbox: string; routing?: Promise<ReadonlySet<string>>; flight?: Promise<boolean> }
     | undefined {
-    const routing = this.deps.mailboxOwner.pendingDirectReconciliation(ptyId, through)
-    const probe = this.deps.deliveryTarget.whenProbeIdle(ptyId, through)
+    const unstaged = !notice || notice.delivered_at === null
+    const routing =
+      unstaged && (!notice || (!mailbox.startsWith('run:') && !mailbox.startsWith('dispatch:')))
+        ? this.deps.mailboxOwner.pendingDirectReconciliation(ptyId, through)
+        : undefined
+    const probe = unstaged
+      ? this.deps.deliveryTarget.whenProbeIdle(ptyId, through, notice ? mailbox : undefined)
+      : undefined
     const flight = probe
       ? probe.then(() => true)
-      : this.state.whenFlightSettledOrParked(ptyId, through)
+      : this.state.whenFlightSettledOrParked(ptyId, through, notice?.id)
     return routing || flight ? { mailbox, routing, flight } : undefined
   }
 

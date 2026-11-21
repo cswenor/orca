@@ -177,6 +177,18 @@ export abstract class OrcaRuntimeWithRefreshFloatingWorkspacePtyLiveness extends
     this.leavesByPtyId = next
   }
 
+  notifyRestoredMessageArrived(
+    handle: string,
+    messageType: string,
+    messageId: string
+  ): Promise<void> {
+    this.notifyMessageArrived(handle, messageType)
+    const observe = () => this.orchestrationMailboxNotifications.waitForNoticeIdle(messageId)
+    const current = Promise.resolve().then(observe)
+    const repoint = this.mailPointerRepointScheduler.whenRepointed(handle)?.then(observe)
+    return repoint ? Promise.all([current, repoint]).then(() => undefined) : current
+  }
+
   protected getLeavesForPty(ptyId: string): readonly RuntimeLeafRecord[] {
     return this.leavesByPtyId.get(ptyId) ?? []
   }
@@ -184,44 +196,18 @@ export abstract class OrcaRuntimeWithRefreshFloatingWorkspacePtyLiveness extends
   // Keep the notification hook on the runtime as well as on the installed
   // command surface: exit escalation can wake an in-flight --wait directly.
   notifyMessageArrived(handle: string, messageType?: string): void {
-    this.notifyMailboxMessage(handle, messageType, false)
-  }
-
-  notifyRestoredMessageArrived(handle: string, messageType: string): Promise<void> | undefined {
-    return this.notifyMailboxMessage(handle, messageType, true)
-  }
-
-  private notifyMailboxMessage(
-    handle: string,
-    messageType: string | undefined,
-    waitForRecovery: boolean
-  ): Promise<void> | undefined {
     // Heartbeats are stored handled and only record liveness; they never wake a mailbox.
     if (messageType === 'heartbeat') {
       return
     }
-    const through = waitForRecovery
-      ? (this._orchestrationDb?.getMessageSequenceWatermark() ?? 0)
-      : undefined
-    let scheduled: Promise<void> | undefined
     if (!handle.startsWith('dispatch:')) {
       this.mailPointerRepointScheduler.schedule(handle)
-      if (through !== undefined) {
-        scheduled = this.mailPointerRepointScheduler.completion(handle, through)
-      }
     } else {
       // A waiting ask rechecks its question, which a settled Dispatch has closed.
       this.messageWaiters.notifyPrefix(questionAnswerWaitPrefix(handle.slice('dispatch:'.length)))
       // A helper that settled may have been all that held back its creator's report.
       reconsiderCreatorRest(handle, this.workerTurnStopReportDeps)
     }
-    const current = this.orchestrationMailboxNotifications.notifyMessageArrived(
-      handle,
-      messageType,
-      through
-    )
-    return scheduled && current
-      ? Promise.all([scheduled, current]).then(() => undefined)
-      : (scheduled ?? current)
+    this.orchestrationMailboxNotifications.notifyMessageArrived(handle, messageType)
   }
 }
