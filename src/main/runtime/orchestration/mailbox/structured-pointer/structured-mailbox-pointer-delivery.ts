@@ -46,8 +46,10 @@ export class OrchestrationStructuredMailboxPointerDelivery<
   private readonly authority: mailCustody.StructuredMailAuthority
   private readonly settledState = new StructuredMailSettledState()
   private readonly replyFollowUp: StructuredMailFollowUp
+  private readonly redeliver: (mailboxHandle: string) => void
 
   constructor(private readonly deps: StructuredPointerDeliveryDependencies<TWaiter>) {
+    this.redeliver = deps.redeliver ?? ((handle) => this.deliverForHandle(handle))
     this.authority = new mailCustody.StructuredMailAuthority({
       ...deps,
       resolve: deps.resolveStructuredTarget
@@ -113,20 +115,18 @@ export class OrchestrationStructuredMailboxPointerDelivery<
   /** Mail a check took, a move re-addressed, or an owner gave up may still wait as a card: delete
    *  those cards so no agent is handed it. Visible cleanup only; the queue asks at handover anyway.
    *  Only the mailboxes the action touched; every one only at startup and reset. */
-  withdrawStale(mailboxes?: Iterable<string>, waitForRedrives = false): Promise<void> | undefined {
+  withdrawStale(mailboxes?: Iterable<string>): void {
     let scope: Iterable<string>
     try {
       scope = mailboxes ?? this.deps.getDb()?.getStructuredMailSendMailboxes() ?? []
     } catch {
       // A database closing under shutdown has no cards left to settle.
-      return undefined
+      return
     }
-    const targets = waitForRedrives && !Array.isArray(scope) ? [...scope] : scope
-    for (const mailboxHandle of targets) {
+    for (const mailboxHandle of scope) {
       this.settledState.invalidate(mailboxHandle)
       this.deliverForHandle(mailboxHandle)
     }
-    return waitForRedrives ? this.redrives.join(targets) : undefined
   }
 
   /** Read only: the queue asks this choosing and publishing its next card, so it settles nothing. */
@@ -351,10 +351,5 @@ export class OrchestrationStructuredMailboxPointerDelivery<
         // Pending or rejected: the record decides on a later pass.
         return 'next'
     }
-  }
-
-  private redeliver(mailboxHandle: string): void {
-    const redeliver = this.deps.redeliver ?? ((handle: string) => this.deliverForHandle(handle))
-    redeliver(mailboxHandle)
   }
 }

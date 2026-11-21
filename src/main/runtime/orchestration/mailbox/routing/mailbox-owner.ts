@@ -34,7 +34,6 @@ export type RoutedOrchestrationMailbox = {
 export type DetachedMailboxRoutingPage = {
   mailboxes: RoutedOrchestrationMailbox[]
   hasMore: boolean
-  nextSequence?: number
   completion?: Promise<ReadonlySet<string>>
 }
 
@@ -162,17 +161,20 @@ export class OrchestrationMailboxOwner {
     paneKey?: string,
     recoveryThrough?: number
   ): DetachedMailboxRoutingPage {
-    const routed = this.routeDetachedDirectPage(directHandle, paneKey)
-    if (routed.hasMore) {
+    const routed = this.deps
+      .getDb()
+      ?.routeForeignDirectMessagesToOwnedMailboxes?.(directHandle, undefined, paneKey)
+    if (routed?.hasMore) {
       this.detachedDirectReconciliation.schedule(directHandle, routed.nextSequence, paneKey)
     }
-    if (recoveryThrough !== undefined) {
-      routed.completion = this.detachedDirectReconciliation.completion(
-        directHandle,
-        recoveryThrough
-      )
+    return {
+      mailboxes: routed?.mailboxes ?? [],
+      hasMore: routed?.hasMore ?? false,
+      completion:
+        recoveryThrough === undefined
+          ? undefined
+          : this.detachedDirectReconciliation.completion(directHandle, recoveryThrough)
     }
-    return routed
   }
 
   async waitForRoutingRedrives(
@@ -199,20 +201,6 @@ export class OrchestrationMailboxOwner {
     through: number
   ): Promise<ReadonlySet<string>> | undefined {
     return this.directReconciliation.completion(ptyId, through)
-  }
-
-  private routeDetachedDirectPage(
-    directHandle: string,
-    paneKey?: string
-  ): DetachedMailboxRoutingPage {
-    const routed = this.deps
-      .getDb()
-      ?.routeForeignDirectMessagesToOwnedMailboxes?.(directHandle, undefined, paneKey)
-    return {
-      mailboxes: routed?.mailboxes ?? [],
-      hasMore: routed?.hasMore ?? false,
-      nextSequence: routed?.nextSequence
-    }
   }
 
   private resolveRunMailbox(

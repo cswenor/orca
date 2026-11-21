@@ -341,11 +341,13 @@ describe('structured mailbox delivery: each message whole', () => {
       return withdraw(sessionId, operationId)
     })
     let finished = false
-    const cleanup = Promise.resolve(h.delivery.withdrawStale([successor, ancestor], true)).then(
-      () => {
-        finished = true
-      }
-    )
+    h.delivery.withdrawStale([successor, ancestor])
+    const cleanup = Promise.all([
+      h.delivery.whenIdle(successor),
+      h.delivery.whenIdle(ancestor)
+    ]).then(() => {
+      finished = true
+    })
     try {
       await Promise.race([
         entered.promise,

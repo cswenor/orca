@@ -58,6 +58,7 @@ export function routeDirectMessagePage(
       params.push(throughSequence)
     }
     params.push(ORCHESTRATION_DELIVERY_BATCH_LIMIT + 1)
+    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: messages declares id, type and sequence as non-null TEXT, TEXT and INTEGER.
     const rows = this.db
       .prepare(
         `SELECT id, type, sequence FROM messages

@@ -113,6 +113,7 @@ export function routeForeignDirectMessagesToOwnedMailboxes(
     const limitedBranches = branches.map(
       (branch) => `SELECT * FROM (${branch} ORDER BY candidate.sequence LIMIT ?)`
     )
+    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: every SQL branch selects these four non-null columns from messages.
     const rows = this.db
       .prepare(
         `SELECT id, run_id, type, sequence FROM (${limitedBranches.join(' UNION ')})
