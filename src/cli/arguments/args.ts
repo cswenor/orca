@@ -12,6 +12,7 @@ import {
 export type ParsedArgs = {
   commandPath: string[]
   flags: Map<string, string | boolean>
+  repeatedAckIds?: true
   positionalFlagConflicts?: string[]
 }
 
@@ -115,14 +116,19 @@ export function parseArgs(
     ? new Set([...REPEATABLE_STRING_FLAGS, ...declared])
     : REPEATABLE_STRING_FLAGS
   const flags = new Map<string, string | boolean>()
+  let repeatedAckIds: true | undefined
   for (const [name, value] of flagEntries) {
+    if (name === 'ack-ids' && flags.has(name)) {
+      repeatedAckIds = true
+      continue
+    }
     if (typeof value === 'string') {
       setFlagValue(flags, name, value, repeatable)
     } else {
       flags.set(name, value)
     }
   }
-  return { commandPath, flags }
+  return { commandPath, flags, ...(repeatedAckIds ? { repeatedAckIds } : {}) }
 }
 
 export function resolveHelpPath(parsed: ParsedArgs): string[] | null {
@@ -205,7 +211,7 @@ export function normalizeCommandPositionals(specs: CommandSpec[], parsed: Parsed
           setFlagValue(flags, name, value, new Set(spec.repeatableFlags ?? []))
         }
       })
-      return { commandPath: spec.path, flags, positionalFlagConflicts }
+      return { ...parsed, commandPath: spec.path, flags, positionalFlagConflicts }
     }
   }
   return parsed
@@ -247,6 +253,13 @@ export function validateCommandAndFlags(specs: CommandSpec[], parsed: ParsedArgs
       `Pass ${parsed.positionalFlagConflicts
         .map((flag) => `--${flag}`)
         .join(', ')} either positionally or as a flag, not both.`
+    )
+  }
+
+  if (parsed.repeatedAckIds) {
+    throw new RuntimeClientError(
+      'invalid_argument',
+      'Pass --ack-ids once with all selected IDs in a single comma-separated list.'
     )
   }
 

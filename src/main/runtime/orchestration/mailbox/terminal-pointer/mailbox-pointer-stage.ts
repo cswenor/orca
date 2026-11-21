@@ -1,4 +1,5 @@
 import { formatMessagePointer } from '../formatting/message-formatting'
+import { MAILBOX_POINTER_WRITE_ATTEMPTED } from '../../db/messages/mailbox-pointer-enter-state'
 import type {
   OrchestrationMailboxPointerMessage,
   PointerDeliveryDependencies
@@ -129,7 +130,11 @@ function finishPointerWriteAndStageEnter<TWaiter extends OrchestrationMessageWai
     }
     const db = args.deps.getDb()
     if (settlement.outcome === 'refused') {
-      db?.markAsUndelivered(flight.stagedMessageIds)
+      db?.releaseMailboxPointerEnter(
+        flight.stagedMessageIds,
+        { ptyId, processIncarnation: expectedTarget.processIncarnation },
+        [MAILBOX_POINTER_WRITE_ATTEMPTED]
+      )
       if (args.state.clearWatermark(args.mailboxHandle, args.newestSequence, ptyId)) {
         // A delivery parked behind this watermark has to drain now that it is gone.
         args.redrive(args.mailboxHandle)

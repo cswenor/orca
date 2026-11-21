@@ -91,6 +91,24 @@ describe('orca cli worktree awareness', () => {
       error: { code: 'consumer_fenced' }
     })
   })
+
+  it.each(['--ack-ids=msg_other', '--ack-ids'])(
+    'refuses repeated selective acknowledgment flags (%s) before contacting Orca',
+    async (first) => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      await main(
+        ['orchestration', 'check', first, '--ack-ids', 'msg_selected', '--json'],
+        '/tmp/repo'
+      )
+
+      expect(callMock).not.toHaveBeenCalled()
+      expect(process.exitCode).toBe(1)
+      expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toMatchObject({
+        ok: false,
+        error: { code: 'invalid_argument', message: expect.stringContaining('Pass --ack-ids once') }
+      })
+    }
+  )
 })
 
 describe('orchestration inbox --run', () => {

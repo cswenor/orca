@@ -31,7 +31,11 @@ import {
   TERMINAL_HANDLE,
   WORKTREE_ID
 } from '../../../../orchestration/mailbox/terminal-pointer/orchestration-mailbox-notification-test-harness'
-import { WRITE_ACCEPTED } from '../../../../../../shared/terminal/pty/lifecycle/pty-write-settlement'
+import {
+  WRITE_ACCEPTED,
+  writeRefused,
+  type WriteSettlement
+} from '../../../../../../shared/terminal/pty/lifecycle/pty-write-settlement'
 
 const harness = createOrchestrationRpcHarness()
 afterEach(() => harness.cleanup())
@@ -721,48 +725,67 @@ it('refuses a pane-only acknowledgment from a second leaf showing the coordinato
   }
 })
 
-it('ordinary PTY retirement releases a typed pointer after selective acknowledgment', async () => {
-  vi.useFakeTimers()
-  const db = new OrchestrationDb(':memory:')
-  try {
-    const { runtime, write } = await createRuntime(db, { launchAgent: null })
-    const run = createBoundRun(db, 'Cancel pointer')
-    const selected = db.insertMessage({
-      from: 'term_sender',
-      to: `run:${run.id}`,
-      runId: run.id,
-      subject: 'Typed status'
-    })
-    await driveToLiveIdle(runtime)
-    expect(pointerCount(write)).toBe(1)
-    await expect(
-      new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS }).dispatch({
-        id: 'rpc_canceled_pointer',
-        authToken: 'test',
-        method: 'orchestration.ackMessages',
-        params: { terminal: TERMINAL_HANDLE, ackIds: [selected.id] },
-        orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
-        orchestrationRequestId: 'canceled_pointer'
+it.each(['retirement', 'write refusal'] as const)(
+  'ordinary PTY %s releases a pending pointer after selective acknowledgment',
+  async (cancel) => {
+    vi.useFakeTimers()
+    const db = new OrchestrationDb(':memory:')
+    try {
+      const { runtime, write } = await createRuntime(db, { launchAgent: null })
+      const pending = Promise.withResolvers<WriteSettlement>()
+      if (cancel === 'write refusal') {
+        runtime.setPtyController({
+          write,
+          writeWithSettlement: (ptyId, data) => {
+            write(ptyId, data)
+            return pending.promise
+          },
+          kill: vi.fn(),
+          getForegroundProcess: async () => null
+        })
+      }
+      const run = createBoundRun(db, 'Cancel pointer')
+      const selected = db.insertMessage({
+        from: 'term_sender',
+        to: `run:${run.id}`,
+        runId: run.id,
+        subject: 'Typed status'
       })
-    ).resolves.toMatchObject({ ok: true })
-    expect(db.getMessageById(selected.id)).toMatchObject({
-      read: 1,
-      pointer_enter_pending: MAILBOX_POINTER_WRITE_ATTEMPTED
-    })
-    runtime.onPtyExit(PTY_ID, 0)
-    await vi.advanceTimersByTimeAsync(500)
-    expect(write.mock.calls.some(([, payload]) => payload === '\r')).toBe(false)
-    expect(db.getMessageById(selected.id)).toMatchObject({
-      read: 1,
-      pointer_enter_pending: 0,
-      pointer_pty_id: null,
-      pointer_process_incarnation: null
-    })
-  } finally {
-    vi.useRealTimers()
-    db.close()
+      await driveToLiveIdle(runtime)
+      expect(pointerCount(write)).toBe(1)
+      await expect(
+        new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS }).dispatch({
+          id: 'rpc_canceled_pointer',
+          authToken: 'test',
+          method: 'orchestration.ackMessages',
+          params: { terminal: TERMINAL_HANDLE, ackIds: [selected.id] },
+          orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+          orchestrationRequestId: 'canceled_pointer'
+        })
+      ).resolves.toMatchObject({ ok: true })
+      expect(db.getMessageById(selected.id)).toMatchObject({
+        read: 1,
+        pointer_enter_pending: MAILBOX_POINTER_WRITE_ATTEMPTED
+      })
+      if (cancel === 'write refusal') {
+        pending.resolve(writeRefused('provider_refused_write'))
+      } else {
+        runtime.onPtyExit(PTY_ID, 0)
+      }
+      await vi.advanceTimersByTimeAsync(500)
+      expect(write.mock.calls.some(([, payload]) => payload === '\r')).toBe(false)
+      expect(db.getMessageById(selected.id)).toMatchObject({
+        read: 1,
+        pointer_enter_pending: 0,
+        pointer_pty_id: null,
+        pointer_process_incarnation: null
+      })
+    } finally {
+      vi.useRealTimers()
+      db.close()
+    }
   }
-})
+)
 
 it('an ordinary Run check takes the next batch if a selective ACK empties its claim', async () => {
   const { db, ctx, activeRunId } = harness.setup()
