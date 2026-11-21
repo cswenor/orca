@@ -5,6 +5,17 @@ export function isSelectiveAckRequest({ method }: RpcRequest): boolean {
   return method === 'orchestration.ackMessages'
 }
 
+/** The CLI probes its local caller without publishing an interaction before a selective command. */
+export function isCallerProbe({ method, params }: RpcRequest): boolean {
+  return (
+    method === 'orchestration.callerShow' &&
+    params !== null &&
+    typeof params === 'object' &&
+    'readOnly' in params &&
+    params.readOnly === true
+  )
+}
+
 export function selectiveAckPeerError(): OrchestrationError {
   return new OrchestrationError(
     'invalid_argument',

@@ -49,7 +49,9 @@ type AckMessagesResult = {
 export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
   'orchestration check': async (ctx) => {
     const { flags, client, cwd, json } = ctx
-    await refuseAgentServerRoute('check', ctx)
+    if (!flags.has('ack-ids')) {
+      await refuseAgentServerRoute('check', ctx)
+    }
     const wait = flags.has('wait')
     const peek = flags.has('peek')
     const ackIds = getPresentStringFlag(flags, 'ack-ids')
@@ -80,6 +82,7 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
           '--ack-ids requires a comma-separated list of nonempty message IDs.'
         )
       }
+      await refuseAgentServerRoute('check', ctx, true)
       const status = await client.call<RuntimeStatus>('status.get', undefined, {
         recordEnvironmentUsage: false
       })

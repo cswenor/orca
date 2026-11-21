@@ -5,7 +5,10 @@ import { readInjectedAgentSessionId } from '../../../shared/agent-session/lifecy
 import type { OrchestrationCallerShowResult } from '../../../shared/orchestration/orchestration-caller-status'
 import { renderOrchestrationArgv } from '../agent-view'
 import type { RuntimeStatus } from '../../../shared/remote-runtime/session-graph/runtime-session-contracts'
-import { ORCHESTRATION_PEER_MAIL_RUNTIME_CAPABILITY } from '../../../shared/orchestration/orchestration-runtime-capabilities'
+import {
+  ORCHESTRATION_PEER_MAIL_RUNTIME_CAPABILITY,
+  ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY
+} from '../../../shared/orchestration/orchestration-runtime-capabilities'
 
 type AgentServerRoutedCommand = 'send' | 'worker-start' | 'check'
 
@@ -22,13 +25,25 @@ function serverSelector(
 }
 
 /** Only an agent its own Orca verifies counts; a person's shell keeps --environment = run it there. */
-async function isOrcaVerifiedAgent(): Promise<boolean> {
+async function isOrcaVerifiedAgent(readOnly: boolean): Promise<boolean> {
   if (!readInjectedAgentSessionId() && !process.env.ORCA_AGENT_LAUNCH_TOKEN?.trim()) {
     return false
   }
+  const local = new RuntimeClient(undefined, 10_000, null, null)
+  if (readOnly) {
+    const status = await local.call<RuntimeStatus>('status.get')
+    if (!status.result.capabilities?.includes(ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY)) {
+      throw new RuntimeClientError(
+        'incompatible_runtime',
+        'The local Orca runtime cannot verify this mailbox route without side effects. No messages were consumed.'
+      )
+    }
+  }
   try {
-    const local = new RuntimeClient(undefined, 10_000, null, null)
-    const { result } = await local.call<OrchestrationCallerShowResult>('orchestration.callerShow')
+    const { result } = await local.call<OrchestrationCallerShowResult>(
+      'orchestration.callerShow',
+      readOnly ? { readOnly: true } : undefined
+    )
     return result.caller !== null || result.terminal === true
   } catch {
     return false
@@ -58,13 +73,14 @@ function withOn(rawArgs: readonly string[] | undefined, server: string): string 
 /** An agent's mail and workers live on its own Orca; pointing them at another server reaches nobody. */
 export async function refuseAgentServerRoute(
   command: AgentServerRoutedCommand,
-  ctx: HandlerContext
+  ctx: HandlerContext,
+  readOnly = false
 ): Promise<void> {
   if (!ctx.client.isRemote || ctx.flags.has('on')) {
     return
   }
   const server = serverSelector(ctx.flags)
-  if (!server || !(await isOrcaVerifiedAgent())) {
+  if (!server || !(await isOrcaVerifiedAgent(readOnly))) {
     return
   }
   const { name, route } = server

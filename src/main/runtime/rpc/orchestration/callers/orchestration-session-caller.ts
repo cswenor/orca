@@ -36,7 +36,7 @@ import { BOT_ITEM_WRITE_METHOD_NAMES } from '../../../../../shared/bots/bot-item
 import { CONNECTOR_POST_METHOD_NAMES } from '../../../../../shared/connector-action-contract'
 import type { RpcRequest } from '../../core'
 import type { OrchestrationCallerField } from '../../methods/orchestration/access/orchestration-method-access'
-import { isSelectiveAckRequest } from './selective-ack-caller'
+import { isCallerProbe, isSelectiveAckRequest } from './selective-ack-caller'
 
 export type OrchestrationRequestRoute = {
   /** Set only by the paired WebSocket route: the request came from another host's client. */
@@ -129,7 +129,7 @@ export async function resolveOrchestrationSessionCaller(
     runtime,
     claimed,
     request.method,
-    !selectiveAck
+    !selectiveAck && !isCallerProbe(request)
   )
   const db = runtime.getOrchestrationDb()
   const store = selectiveAck ? getStructuredAgentSessionHost()?.deps.store : undefined

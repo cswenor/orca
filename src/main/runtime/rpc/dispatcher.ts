@@ -22,7 +22,7 @@ import {
   type DurableMutationInvocation,
   type OrchestrationMutationExecutor
 } from './orchestration/mutations/orchestration-mutation-executor'
-import { isSelectiveAckRequest } from './orchestration/callers/selective-ack-caller'
+import { isCallerProbe, isSelectiveAckRequest } from './orchestration/callers/selective-ack-caller'
 import { OrchestrationLegacyCompatibility } from './orchestration/compatibility/orchestration-legacy-compatibility'
 import type { RpcDispatchStreamingOptions } from './dispatch/dispatcher-stream-options'
 import { mapDispatcherError } from './responses/dispatcher-error-response'
@@ -298,7 +298,7 @@ export class RpcDispatcher {
       callerFingerprint,
       context.orchestrationCaller
     )
-    if (selectiveAck) {
+    if (selectiveAck || isCallerProbe(request)) {
       return result
     }
     if (name.startsWith('orchestration.')) {

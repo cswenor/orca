@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY } from '../../../shared/orchestration/orchestration-runtime-capabilities'
 import { RuntimeClientError } from '../../runtime/connection/types'
+import { RuntimeClient } from '../../runtime/client'
 
 const callMock = vi.hoisted(() => vi.fn())
 const getTerminalHandleMock = vi.hoisted(() => vi.fn())
@@ -23,6 +24,8 @@ describe('orchestration check identity', () => {
   })
 
   afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
     if (originalTerminalHandle === undefined) {
       delete process.env.ORCA_TERMINAL_HANDLE
     } else {
@@ -35,10 +38,10 @@ describe('orchestration check identity', () => {
     }
   })
 
-  const invokeCheck = (flags: Map<string, string | boolean>, json = true) =>
+  const invokeCheck = (flags: Map<string, string | boolean>, json = true, isRemote = false) =>
     ORCHESTRATION_HANDLERS['orchestration check']({
       flags,
-      client: { call: callMock },
+      client: { call: callMock, isRemote },
       cwd: '/tmp/repo',
       json
     } as never)
@@ -108,6 +111,38 @@ describe('orchestration check identity', () => {
         'status.get',
         'orchestration.ackMessages'
       ])
+    }
+  )
+
+  it.each([false, true])(
+    'does not use an ordinary local caller probe for remote selective ack (capable: %s)',
+    async (capable) => {
+      vi.stubEnv('ORCA_AGENT_LAUNCH_TOKEN', 'test-launch')
+      const local = vi.spyOn(RuntimeClient.prototype, 'call')
+      local.mockResolvedValueOnce({
+        result: { capabilities: capable ? [ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY] : [] }
+      } as never)
+      if (capable) {
+        local.mockResolvedValueOnce({ result: { caller: null, terminal: true } } as never)
+      }
+      await expect(
+        invokeCheck(
+          new Map([
+            ['environment', 'peer'],
+            ['ack-ids', 'msg_selected']
+          ]),
+          true,
+          true
+        )
+      ).rejects.toMatchObject({
+        code: capable ? 'mailbox_is_local' : 'incompatible_runtime'
+      })
+      expect(local.mock.calls).toEqual(
+        capable
+          ? [['status.get'], ['orchestration.callerShow', { readOnly: true }]]
+          : [['status.get']]
+      )
+      expect(callMock).not.toHaveBeenCalled()
     }
   )
 

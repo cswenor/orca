@@ -321,6 +321,14 @@ it('only writes read state and a receipt, including on dispatcher replay', async
     .spyOn(runtime, 'refreshAgentSenderAssociations')
     .mockResolvedValue(undefined)
   const recordInteraction = vi.spyOn(runtime, 'recordFeatureInteraction')
+  await expect(
+    dispatcher.dispatch({
+      id: 'rpc_ack_caller_probe',
+      authToken: 'test',
+      method: 'orchestration.callerShow',
+      params: { readOnly: true }
+    })
+  ).resolves.toMatchObject({ ok: true, result: { caller: null, terminal: false } })
   const request = {
     id: 'rpc_ack',
     authToken: 'test',
