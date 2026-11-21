@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY } from '../../../shared/orchestration/orchestration-runtime-capabilities'
-import { RuntimeClientError } from '../../runtime/connection/types'
+import { RuntimeClientError, RuntimeRpcFailureError } from '../../runtime/connection/types'
 import { RuntimeClient } from '../../runtime/client'
 
 const callMock = vi.hoisted(() => vi.fn())
@@ -83,6 +83,40 @@ describe('orchestration check identity', () => {
       ackIds: ['msg_selected']
     })
   })
+
+  it.each([true, false])(
+    'only suppresses unknown-outcome advice for confirmed startup refusal (confirmed: %s)',
+    async (confirmed) => {
+      process.env.ORCA_TERMINAL_HANDLE = 'term_coord'
+      const code = 'runtime_unavailable'
+      const message = confirmed
+        ? 'Startup mailbox recovery is still running. No messages were acknowledged.'
+        : 'The runtime closed the connection.'
+      const data = { orchestrationRequestId: 'ack_startup_retry' }
+      callMock
+        .mockResolvedValueOnce({
+          result: { capabilities: [ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY] }
+        })
+        .mockRejectedValueOnce(
+          confirmed
+            ? new RuntimeRpcFailureError({
+                id: 'rpc_ack',
+                ok: false,
+                error: { code, message, data: { ...data, effectsApplied: false } },
+                _meta: { runtimeId: 'runtime_local' }
+              })
+            : new RuntimeClientError(code, message, data)
+        )
+      const result = invokeCheck(new Map([['ack-ids', 'msg_selected']]))
+      await expect(result).rejects.toMatchObject({
+        code,
+        message: confirmed ? message : expect.stringContaining('may already have taken effect'),
+        data: confirmed
+          ? { ...data, effectsApplied: false }
+          : { recovery: { disposition: 'outcome_unknown' } }
+      })
+    }
+  )
 
   it('rejects empty entries in --ack-ids before contacting the runtime', async () => {
     await expect(invokeCheck(new Map([['ack-ids', 'msg_selected,']]))).rejects.toMatchObject({

@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { RuntimeClientError, type RuntimeCallOptions } from '../../runtime/connection/types'
+import {
+  RuntimeClientError,
+  RuntimeRpcFailureError,
+  type RuntimeCallOptions
+} from '../../runtime/connection/types'
 import type { RuntimeClient } from '../../runtime/client'
 import { readRetryRequestFlag } from './retry-request-flag'
 import { orchestrationMutationRecoveryError } from './orchestration-mutation-recovery'
@@ -34,6 +38,19 @@ export async function callOrchestrationMutation<TResult>(
           ? await client.call<TResult>(method, params, options)
           : await client.call<TResult>(method, params)
     } catch (error) {
+      // A confirmed selective-ack refusal has no receipt to look up or replay.
+      if (
+        !sentError &&
+        method === 'orchestration.ackMessages' &&
+        error instanceof RuntimeRpcFailureError &&
+        error.code === 'runtime_unavailable' &&
+        error.data !== null &&
+        typeof error.data === 'object' &&
+        'effectsApplied' in error.data &&
+        error.data.effectsApplied === false
+      ) {
+        throw error
+      }
       const unavailable =
         error instanceof RuntimeClientError && error.code === 'runtime_unavailable'
       const sent = carriesRequestId(error) && !isRequestUnsent(error)
