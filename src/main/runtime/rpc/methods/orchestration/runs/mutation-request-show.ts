@@ -37,7 +37,7 @@ export const ORCHESTRATION_MUTATION_REQUEST_METHODS = [
         method: row.method,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
-        // Selective receipts contain mailbox contents; only the bound replay may return them.
+        // Selective receipts are only returned through replay with a matching live mailbox binding.
         ...(row.receipt && row.method !== 'orchestration.ackMessages'
           ? { receipt: parseReceipt(row.receipt) }
           : {}),

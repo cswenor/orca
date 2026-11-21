@@ -2,8 +2,6 @@ import type { OrcaRuntimeService } from '../../../orca-runtime'
 import type { RpcRequest } from '../../core'
 import type { OrchestrationCallerField } from '../../methods/orchestration/access/orchestration-method-access'
 import { isDispatchMutationMessageType } from '../../../../../shared/rpc-contract/orchestration/orchestration-params'
-import { isStructuredWorkerHandle } from '../../../../../shared/orchestration/workers/structured-worker-handle'
-import { isSelectiveAckRequest } from './selective-ack-caller'
 
 // The calls a worker makes as itself, each fenced on its terminal's pane and process.
 const WORKER_REPORT_METHODS: ReadonlySet<string> = new Set([
@@ -37,31 +35,11 @@ export function waitForRestoredWorkerCallerIdentity(
       ? typeof params.type !== 'string' || !isDispatchMutationMessageType(params.type)
       : request.method === 'orchestration.check' && params.wait === true
   const terminal = typeof handle === 'string' ? handle : undefined
-  const restore =
-    terminal &&
+  return terminal &&
     !skipsIdentityCheck &&
     runtime.startupWorkerAuthority.isPending() &&
     (runtime.getTerminalPaneKey(terminal) === null ||
       runtime.getTerminalProcessIncarnation(terminal) === null)
-      ? runtime.startupWorkerAuthority.wait(signals)
-      : null
-  if (!isSelectiveAckRequest(request)) {
-    return restore
-  }
-  const initializeDeclaredWorker = async (): Promise<void> => {
-    const handle = terminal?.trim() || 'unknown'
-    const declaredPane = params.terminalPaneKey
-    const pane =
-      runtime.getTerminalPaneKey(handle) ??
-      (typeof declaredPane === 'string' ? declaredPane.trim() : undefined)
-    if (
-      isStructuredWorkerHandle(handle) ||
-      (pane &&
-        runtime.getOrchestrationDb().getActiveDispatchForIdentity(handle, pane)
-          ?.assignee_orca_session_id)
-    ) {
-      await runtime.ensureStructuredAgentSessionHost()
-    }
-  }
-  return restore ? restore.then(initializeDeclaredWorker) : initializeDeclaredWorker()
+    ? runtime.startupWorkerAuthority.wait(signals)
+    : null
 }

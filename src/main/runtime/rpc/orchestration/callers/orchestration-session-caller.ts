@@ -109,10 +109,6 @@ export async function resolveOrchestrationSessionCaller(
 ): Promise<ResolvedOrchestrationRequest> {
   const evidence = request.orchestrationCompatibilityEvidence
   if (evidence?.agentSessionId === undefined) {
-    if (isSelectiveAckRequest(request)) {
-      // Ordinary pane authority still applies; finish shared startup before taking its mailbox snapshot.
-      await runtime.ensureStructuredAgentSessionHost()
-    }
     return {
       request: bindDeclaredSessionAddress(runtime.getOrchestrationDb(), request, callerField)
     }

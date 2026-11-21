@@ -159,13 +159,18 @@ describe('a structured worker that names itself by session id', () => {
       terminal: ADDRESS_Y,
       ackIds: [declaredMail.id]
     })
-    // A declared handle still consumes under ordinary authority, but its receipt must
-    // capture the lease after shared startup, not the unreconciled record on disk.
-    current.lease = { ...current.lease, unreconciled: true }
-    vi.mocked(h.runtime.ensureStructuredAgentSessionHost).mockImplementationOnce(async () => {
-      await Promise.resolve()
-      current.lease = { ...current.lease, unreconciled: false }
+    const initializeHost = vi.mocked(h.runtime.ensureStructuredAgentSessionHost)
+    initializeHost.mockClear()
+    const missing = orchestrationRequest('orchestration.ackMessages', {
+      terminal: ADDRESS_Y,
+      ackIds: [declaredMail.id],
+      replayOnly: true
     })
+    expect(await h.dispatch(missing)).toMatchObject({
+      ok: false,
+      error: { code: 'operation_unknown', data: { effectsApplied: false } }
+    })
+    expect(h.db.getMessageById(declaredMail.id)?.read).toBe(0)
     expect(resultOf(await h.dispatch(declared))).toMatchObject({ markedIds: [declaredMail.id] })
     expect(resultOf(await h.dispatch(declared))).toMatchObject({ mutation: { replayed: true } })
     current.lease = { ...current.lease, unreconciled: true }
@@ -184,13 +189,10 @@ describe('a structured worker that names itself by session id', () => {
       terminalPaneKey: paneKey,
       ackIds: [paneMail.id]
     })
-    current.lease = { ...current.lease, unreconciled: true }
-    vi.mocked(h.runtime.ensureStructuredAgentSessionHost).mockImplementationOnce(async () => {
-      await Promise.resolve()
-      current.lease = { ...current.lease, unreconciled: false }
-    })
+    // Declared workers use existing terminal authority; there is no selective-only host startup.
     expect(resultOf(await h.dispatch(paneOnly))).toMatchObject({ markedIds: [paneMail.id] })
     expect(resultOf(await h.dispatch(paneOnly))).toMatchObject({ mutation: { replayed: true } })
+    expect(initializeHost).not.toHaveBeenCalled()
     expect(resultOf(await h.dispatch(injected))).toMatchObject({ markedIds: [message.id] })
     expect(resultOf(await h.dispatch(injected))).toMatchObject({ mutation: { replayed: true } })
     current.lease = { ...current.lease, runtimeFence: current.lease.runtimeFence + 1 }
