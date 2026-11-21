@@ -71,7 +71,12 @@ export const ORCHESTRATION_CHECK_HANDLER: Record<string, CommandHandler> = {
           `--ack-ids cannot be combined with --${incompatible}.`
         )
       }
-      AckMessagesParams.parse({ ackIds })
+      if (!AckMessagesParams.safeParse({ ackIds }).success) {
+        throw new RuntimeClientError(
+          'invalid_argument',
+          '--ack-ids requires a comma-separated list of nonempty message IDs.'
+        )
+      }
       const status = await client.call<RuntimeStatus>('status.get')
       if (!status.result.capabilities?.includes(ORCHESTRATION_SELECTIVE_ACK_RUNTIME_CAPABILITY)) {
         throw new RuntimeClientError(

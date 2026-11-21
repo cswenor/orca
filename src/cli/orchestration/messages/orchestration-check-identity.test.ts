@@ -50,6 +50,13 @@ describe('orchestration check identity', () => {
     expect(callMock.mock.calls.map(([method]) => method)).toEqual(['status.get'])
   })
 
+  it('rejects empty entries in --ack-ids before contacting the runtime', async () => {
+    await expect(invokeCheck(new Map([['ack-ids', 'msg_selected,']]))).rejects.toMatchObject({
+      code: 'invalid_argument'
+    })
+    expect(callMock).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['wait', true],
     ['ack', ''],

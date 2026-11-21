@@ -6,7 +6,7 @@ import {
 import '../../construction/test-context/runtime-test-module-registration.spec'
 import { OrcaRuntimeService } from '../../orca-runtime'
 import '../../orca-runtime-test-mocks/setup.spec'
-import { makePaneKey } from '../../../../shared/workspace-layout/stable-pane-id'
+import { makePaneKey, parsePaneKey } from '../../../../shared/workspace-layout/stable-pane-id'
 import { assertSelectiveAckCaller } from '../../rpc/orchestration/callers/selective-ack-caller'
 import {
   HEADLESS_LEAF_ID,
@@ -23,8 +23,10 @@ import { spawnedPtyEnv } from '../../terminal/launch/spawned-pty-env-fixtures'
 import '../../../../shared/agent-launch/startup/jcode-runtime-dir'
 
 describe('OrcaRuntimeService', () => {
-  it('retires inherited launch authority when the agent command exits', async () => {
-    const spawn = vi.fn().mockResolvedValue({ id: 'pty-authority', incarnationId: 'process-1' })
+  it.each([false, true])('retires launch authority (late process ID: %s)', async (late) => {
+    const spawn = vi
+      .fn()
+      .mockResolvedValue({ id: 'pty-authority', incarnationId: late ? undefined : 'process-1' })
     const retireAuthority = vi.fn()
     const runtime = new OrcaRuntimeService(store, undefined, {
       attestAgentHookCompatibilityAuthority: (candidate) => ({
@@ -57,7 +59,7 @@ describe('OrcaRuntimeService', () => {
 
     const terminal = await runtime.createTerminal(`path:${TEST_WORKTREE_PATH}`, {
       command: 'codex',
-      launchAgent: 'codex',
+      launchAgent: late ? undefined : 'codex',
       launchConfig: { agentCommand: 'codex', agentArgs: '', agentEnv: {} }
     })
     const spawnEnv = spawnedPtyEnv(spawn.mock.calls[0]?.[0])
@@ -67,6 +69,19 @@ describe('OrcaRuntimeService', () => {
       launchToken: spawnEnv.ORCA_AGENT_LAUNCH_TOKEN
     }
 
+    if (late) {
+      const pane = parsePaneKey(evidence.paneKey!)!
+      runtime.registerPty('pty-authority', TEST_WORKTREE_ID, null, {
+        ...pane,
+        incarnationId: 'process-1'
+      })
+      expect(() =>
+        assertSelectiveAckCaller(undefined, runtime, terminal.handle, 'pty-authority:process-1', {
+          paired: false,
+          evidence: undefined
+        })
+      ).toThrow('cannot verify this restored pane')
+    }
     expect(runtime.verifyOrchestrationCompatibilityCaller(evidence)).not.toBeNull()
     expect((await runtime.listTerminals()).terminals).toEqual([
       expect.objectContaining({ handle: terminal.handle, agentIdentity: 'codex' })

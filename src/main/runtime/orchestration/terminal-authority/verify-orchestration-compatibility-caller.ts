@@ -134,7 +134,7 @@ export abstract class OrcaRuntimeWithVerifyOrchestrationCompatibilityCaller exte
     if (evidence && evidence.kind !== 'unknown' && evidence.incarnationId === pty.incarnationId) {
       return evidence.kind === 'held'
         ? evidence.token
-        : evidence.daemonNoteAbsent
+        : evidence.daemonNoteAbsent || pty.launchToken
           ? undefined
           : null
     }
