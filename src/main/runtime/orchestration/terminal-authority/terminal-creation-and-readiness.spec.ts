@@ -10,6 +10,7 @@ import { makePaneKey, parsePaneKey } from '../../../../shared/workspace-layout/s
 import { assertSelectiveAckCaller } from '../../rpc/orchestration/callers/selective-ack-caller'
 import { commitPtyIpcSpawn } from '../../../ipc/pty/ipc/spawn-commit'
 import { createPtyIpcSpawnState } from '../../../ipc/pty/ipc/spawn-state'
+import type { PtySpawnIpcDeps } from '../../../ipc/pty/ipc/spawn-types'
 import { unregisterPty } from '../../../memory/pty-registry'
 import {
   HEADLESS_LEAF_ID,
@@ -131,9 +132,7 @@ describe('OrcaRuntimeService', () => {
     registerLivePty(runtime, ptyId, TEST_WORKTREE_ID, null, pane)
     const launchToken = 'renderer-launch-token'
     const spawn = createPtyIpcSpawnState(
-      { runtime, sendPtySpawnedToRenderer: vi.fn() } as Parameters<
-        typeof createPtyIpcSpawnState
-      >[0],
+      { runtime, sendPtySpawnedToRenderer: vi.fn() } as unknown as PtySpawnIpcDeps,
       {
         cols: 80,
         rows: 24,
