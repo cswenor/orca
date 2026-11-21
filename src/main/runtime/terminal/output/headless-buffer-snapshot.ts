@@ -9,6 +9,7 @@ import type {
 import { randomUUID } from 'node:crypto'
 import type { RuntimeHeadlessTerminal } from '../records/runtime-terminal-state-records'
 import { parsePaneKey } from '../../../../shared/workspace-layout/stable-pane-id'
+import { isEquivalentPaneKey } from '../../orchestration/db/pane-key-match'
 
 export abstract class OrcaRuntimeWithSerializeHeadlessTerminalBuffer extends OrcaRuntimeWithRestoredAgentDialogScreen {
   /** Keyed by the attachment that carries each one, so releasing it forgets the terminal. */
@@ -227,7 +228,9 @@ export abstract class OrcaRuntimeWithSerializeHeadlessTerminalBuffer extends Orc
     }
     const handle = this.handleByPtyId.get(pty.ptyId)
     const live = handle && this.getLivePtyForHandle(handle, undefined, true)
-    return live && live.pty === pty ? handle : undefined
+    // A process can be visible from several leaves. Its handle authorizes only its own pane.
+    const livePane = live && live.pty === pty ? this.paneOfPty(pty).paneKey : null
+    return livePane && isEquivalentPaneKey(livePane, paneKey) ? handle : undefined
   }
 
   getOrchestrationCompatibilityHostId(): 'local' {

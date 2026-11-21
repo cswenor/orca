@@ -61,12 +61,17 @@ export function orchestrationCallerIdentity(
     handle: string
     paneKey: string | null | undefined
     session: OrchestrationEntryCaller | undefined
+    readOnly?: boolean
   }
 ): OrchestrationCallerIdentity {
   if (caller.session) {
     return caller.session
   }
-  const party = resolveDeclaredCallerParty(caller.handle, runtime.getOrchestrationDb())
+  const party = resolveDeclaredCallerParty(
+    caller.handle,
+    runtime.getOrchestrationDb(),
+    caller.readOnly
+  )
   return { ...party, paneKey: caller.paneKey ?? null }
 }
 
@@ -176,6 +181,7 @@ export function resolveRunScope(runtime: OrcaRuntimeService, params: RunScopePar
   const caller = orchestrationCallerIdentity(runtime, {
     handle: params.callerTerminalHandle,
     session: params.callerSession,
+    readOnly: params.readOnlyCaller,
     paneKey:
       params.callerSession === undefined
         ? (params.callerPaneKey ??

@@ -72,6 +72,7 @@ export async function checkRunPendingMail(args: {
   const caller = orchestrationCallerIdentity(runtime, {
     handle,
     paneKey,
+    readOnly: params.ackIds !== undefined,
     session: args.callerSession
   })
   // Drain pre-bind mail through its original Dispatch owner, never by changing its Run.
@@ -127,6 +128,7 @@ export async function checkRunPendingMail(args: {
                     sessionId: orchestrationCallerIdentity(runtime, {
                       handle,
                       paneKey,
+                      readOnly: true,
                       session: args.callerSession
                     }).orcaSessionId,
                     residual: true

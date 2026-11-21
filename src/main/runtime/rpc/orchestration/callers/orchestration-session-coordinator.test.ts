@@ -108,6 +108,69 @@ describe('a structured worker that names itself by session id', () => {
     })
   })
 
+  it.each(['session evidence', 'declared address'])(
+    'reads durable worker identity for acknowledgment and replay without registering it: %s',
+    async (route) => {
+      const run = h.db.createRun({
+        objective: 'Durable worker identity',
+        coordinatorHandle: null,
+        coordinatorPaneKey: null,
+        coordinatorOrcaSessionId: SESSION_X
+      })
+      const dispatch = h.db.createDispatchContext({
+        taskId: h.db.createTask({ runId: run.id, spec: 'worker' }).id,
+        assigneeHandle: handle,
+        assigneePaneKey: paneKey,
+        processIncarnation: structuredWorkerProcessIncarnation(workerSession),
+        creator: { kind: 'session', orcaSessionId: SESSION_X },
+        maxDepth: Number.MAX_SAFE_INTEGER
+      })
+      h.db.createWorkerTerminalResourceStatement({
+        dispatchId: dispatch.id,
+        worktreeId: 'wt_1',
+        terminalHandle: handle,
+        paneKey,
+        processIncarnation: structuredWorkerProcessIncarnation(workerSession),
+        hostScope: JSON.stringify({ kind: 'local', hostId: 'local' }),
+        ownership: 'owned'
+      })
+      structuredWorkerIdentities.forget(handle)
+      const message = h.db.insertMessage({
+        from: 'term_sender',
+        to: `dispatch:${dispatch.id}`,
+        runId: run.id,
+        subject: 'Durable worker mail'
+      })
+      const injected = route === 'session evidence'
+      const params = { ackIds: [message.id], ...(injected ? {} : { terminal: ADDRESS_Y }) }
+      const request = orchestrationRequest(
+        'orchestration.ackMessages',
+        params,
+        injected ? { sessionId: workerSession } : {}
+      )
+      if (injected) {
+        expect(
+          resultOf(
+            await h.dispatch(
+              orchestrationRequest(
+                'orchestration.callerShow',
+                { readOnly: true },
+                { sessionId: workerSession }
+              )
+            )
+          )
+        ).toMatchObject({ caller: { orcaSessionId: ADDRESS_Y } })
+        expect(structuredWorkerIdentities.get(handle)).toBeNull()
+      }
+      expect(resultOf(await h.dispatch(request))).toMatchObject({ markedIds: [message.id] })
+      expect(structuredWorkerIdentities.get(handle)).toBeNull()
+      expect(
+        resultOf(await h.dispatch({ ...request, params: { ...params, replayOnly: true } }))
+      ).toMatchObject({ mutation: { replayed: true } })
+      expect(structuredWorkerIdentities.get(handle)).toBeNull()
+    }
+  )
+
   it('fences retries after a lease change for both injected and declared workers', async () => {
     const { run } = resultOf(
       await h.dispatch(
@@ -187,6 +250,9 @@ describe('a structured worker that names itself by session id', () => {
     })
     vi.spyOn(h.runtime, 'getExistingTerminalHandleForPaneKey').mockImplementation((key) =>
       key === paneKey ? handle : undefined
+    )
+    vi.mocked(h.runtime.getTerminalPaneKey).mockImplementation((candidate) =>
+      candidate === handle ? paneKey : null
     )
     const paneOnly = orchestrationRequest('orchestration.ackMessages', {
       terminalPaneKey: paneKey,

@@ -9,8 +9,7 @@ import type { AgentSessionRecord } from '../../../../../shared/agent-session/lif
 import { ORCA_AGENT_SESSION_ID_ENV } from '../../../../../shared/agent-session/lifecycle/launch/agent-session-caller-env'
 import {
   isOrcaSessionId,
-  type OrcaSessionId,
-  parseOrcaSessionAddress
+  type OrcaSessionId
 } from '../../../../../shared/agent-session/identity/orca-session-address'
 import { ORCA_SESSION_ADDRESS_PREFIX } from '../../../../../shared/agent-session/identity/orca-session-address-prefix'
 import { ORCHESTRATION_SESSION_CALLER_ERROR_CODES as CODES } from '../../../../../shared/orchestration/orchestration-session-caller-codes'
@@ -20,13 +19,7 @@ import type {
   OrchestrationSessionCaller
 } from '../../../orchestration/addressing/orchestration-caller-identity'
 import { OrchestrationError } from '../../../orchestration/orchestration-error'
-import { canonicalOrcaSessionId } from '../../../orchestration/addressing/session-lineage/canonical-orca-session-id'
-import type { OrchestrationDb } from '../../../orchestration/db/orchestration-db'
-import {
-  resolveDeclaredCallerParty,
-  resolveOrcaSessionParty,
-  resolveOrchestrationParty
-} from '../../../orchestration/addressing/orchestration-party'
+import { resolveOrcaSessionParty } from '../../../orchestration/addressing/orchestration-party'
 import { lookupOrcaAgentSession } from '../../../orchestration/mailbox/routing/structured-session-mail-address'
 import { conversationRecordReader } from '../../../orchestration/addressing/session-lineage/structured-session-lineage'
 import type { AgentSessionRecordStore } from '../../../agent-session/records/agent-session-record-store'
@@ -37,6 +30,11 @@ import { CONNECTOR_POST_METHOD_NAMES } from '../../../../../shared/connector-act
 import type { RpcRequest } from '../../core'
 import type { OrchestrationCallerField } from '../../methods/orchestration/access/orchestration-method-access'
 import { isCallerProbe, isSelectiveAckRequest } from './selective-ack-caller'
+import {
+  bindDeclaredCaller,
+  bindDeclaredSessionAddress,
+  declaredSessionAddress
+} from './orchestration-declared-caller'
 
 export type OrchestrationRequestRoute = {
   /** Set only by the paired WebSocket route: the request came from another host's client. */
@@ -86,19 +84,6 @@ export function needsOrchestrationCallerResolution(
   )
 }
 
-function declaredSessionAddress(
-  request: RpcRequest,
-  name: OrchestrationCallerField | undefined
-): string | undefined {
-  const params: unknown = request.params
-  if (!name || !params || typeof params !== 'object' || Array.isArray(params)) {
-    return undefined
-  }
-  const values: Record<string, unknown> = { ...params }
-  const declared = values[name]
-  return typeof declared === 'string' && parseOrcaSessionAddress(declared) ? declared : undefined
-}
-
 /** Only for a request `needsOrchestrationCallerResolution` accepts. Throws the refusal, if any. */
 export async function resolveOrchestrationSessionCaller(
   runtime: OrcaRuntimeService,
@@ -108,9 +93,16 @@ export async function resolveOrchestrationSessionCaller(
   callerField: OrchestrationCallerField | undefined
 ): Promise<ResolvedOrchestrationRequest> {
   const evidence = request.orchestrationCompatibilityEvidence
+  const selectiveAck = isSelectiveAckRequest(request)
+  const readOnly = selectiveAck || isCallerProbe(request)
   if (evidence?.agentSessionId === undefined) {
     return {
-      request: bindDeclaredSessionAddress(runtime.getOrchestrationDb(), request, callerField)
+      request: bindDeclaredSessionAddress(
+        runtime.getOrchestrationDb(),
+        request,
+        callerField,
+        readOnly
+      )
     }
   }
   const claimed: unknown = evidence.agentSessionId
@@ -124,12 +116,11 @@ export async function resolveOrchestrationSessionCaller(
       `This command ran in ${evidence.host.kind === 'ssh' ? 'an SSH' : 'a WSL'} environment, and an Orca session ID identifies a caller only on the host that runs that session.`
     )
   }
-  const selectiveAck = isSelectiveAckRequest(request)
   const { sessionId, record } = await readActingSessionRecord(
     runtime,
     claimed,
     request.method,
-    !selectiveAck && !isCallerProbe(request)
+    !readOnly
   )
   const db = runtime.getOrchestrationDb()
   const store = selectiveAck ? getStructuredAgentSessionHost()?.deps.store : undefined
@@ -155,7 +146,7 @@ export async function resolveOrchestrationSessionCaller(
     return [record.sessionId, runtimeFence] as const
   }
   const caller: OrchestrationSessionCaller = Object.freeze({
-    ...resolveOrcaSessionParty(sessionId, db),
+    ...resolveOrcaSessionParty(sessionId, db, undefined, readOnly),
     sessionId,
     workspaceId: record.location.workspaceId,
     ...(selectiveAck ? { revalidateAckLease } : {})
@@ -163,7 +154,7 @@ export async function resolveOrchestrationSessionCaller(
   return {
     request: {
       ...request,
-      params: bindDeclaredCaller(callerField, request.params, caller, db),
+      params: bindDeclaredCaller(callerField, request.params, caller, db, readOnly),
       // Session identity wins; discard terminal attestation on the same request.
       orchestrationCompatibilityEvidence: { agentSessionId: sessionId }
     },
@@ -257,71 +248,6 @@ function assertSessionCanAct(sessionId: string, record: AgentSessionRecord, meth
   throw new OrchestrationError(
     CODES.notLive,
     `Agent session ${sessionId} ${reason} No effects were applied.`,
-    NO_EFFECTS
-  )
-}
-
-/** A request with no session id that declares an `orca_session_id:` caller: a worker's is its handle. */
-function bindDeclaredSessionAddress(
-  db: OrchestrationDb,
-  request: RpcRequest,
-  name: OrchestrationCallerField | undefined
-): RpcRequest {
-  const declared = declaredSessionAddress(request, name)
-  const params: unknown = request.params
-  if (!name || declared === undefined || !params || typeof params !== 'object') {
-    return request
-  }
-  const party = resolveDeclaredCallerParty(declared, db)
-  return { ...request, params: { ...params, [name]: party.address } }
-}
-
-/** Whether a declared caller names this session: any spelling that resolves to its party. */
-function declaredNamesCaller(
-  declared: unknown,
-  caller: OrchestrationSessionCaller,
-  db: OrchestrationDb
-): boolean {
-  if (typeof declared !== 'string') {
-    return false
-  }
-  if (isOrcaSessionId(declared)) {
-    return canonicalOrcaSessionId(declared) === caller.orcaSessionId
-  }
-  try {
-    return resolveOrchestrationParty(declared, db).address === caller.address
-  } catch {
-    return false
-  }
-}
-
-/** The declared caller, if any, must name this session; it is then replaced by its address. */
-function bindDeclaredCaller(
-  name: OrchestrationCallerField | undefined,
-  params: unknown,
-  caller: OrchestrationSessionCaller,
-  db: OrchestrationDb
-): unknown {
-  if (!name || !params || typeof params !== 'object' || Array.isArray(params)) {
-    return params
-  }
-  const values: Record<string, unknown> = { ...params }
-  const declared = values[name]
-  if (declared !== undefined && !declaredNamesCaller(declared, caller, db)) {
-    throw consumerFenced(caller, String(declared))
-  }
-  // Check restart fallback may use only the session's own pane key.
-  if (values.terminalPaneKey !== undefined && values.terminalPaneKey !== caller.paneKey) {
-    throw consumerFenced(caller, `pane ${String(values.terminalPaneKey)}`)
-  }
-  values[name] = caller.address
-  return values
-}
-
-function consumerFenced(caller: OrchestrationSessionCaller, declared: string): OrchestrationError {
-  return new OrchestrationError(
-    'consumer_fenced',
-    `This caller is agent session ${caller.sessionId} and cannot act as ${declared}. No effects were applied.`,
     NO_EFFECTS
   )
 }

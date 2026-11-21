@@ -175,9 +175,9 @@ export function releaseMailboxPointerEnter(
   }
   mutatePointerMessages(this, ids, (placeholders) => ({
     sql: `UPDATE messages
-          SET delivered_at = NULL, pointer_enter_pending = 0,
-              pointer_pty_id = NULL, pointer_process_incarnation = NULL
-          WHERE read = 0 AND pointer_pty_id = ? AND pointer_process_incarnation = ?
+          SET delivered_at = CASE WHEN read = 0 THEN NULL ELSE delivered_at END,
+              pointer_enter_pending = 0, pointer_pty_id = NULL, pointer_process_incarnation = NULL
+          WHERE pointer_pty_id = ? AND pointer_process_incarnation = ?
             AND pointer_enter_pending IN (${expectedPhases.map(() => '?').join(',')})
             AND id IN (${placeholders})`,
     leadingParams: [target.ptyId, target.processIncarnation, ...expectedPhases]

@@ -3,10 +3,7 @@
 
 import type { SessionPartyReader } from '../../addressing/session-party-reader'
 import type { AgentSessionConversationView } from '../../../../../shared/agent-session/lifecycle/leases/agent-session-conversation-view'
-import {
-  isOrcaSessionId,
-  type OrcaSessionId
-} from '../../../../../shared/agent-session/identity/orca-session-address'
+import { isOrcaSessionId } from '../../../../../shared/agent-session/identity/orca-session-address'
 import { ORCHESTRATION_SESSION_CALLER_ERROR_CODES as CODES } from '../../../../../shared/orchestration/orchestration-session-caller-codes'
 import type { RuntimeTerminalState } from '../../../../../shared/terminal/runtime/runtime-terminal-contracts'
 import { getStructuredAgentSessionHost } from '../../../../native-chat/agent-session-wire/host/structured-agent-session-registry'
@@ -31,6 +28,7 @@ import type { TuiAgent } from '../../../../../shared/agent-launch/catalog/tui-ag
 import { isStructuredWorkerHandle } from '../../../../../shared/orchestration/workers/structured-worker-handle'
 import {
   structuredWorkerIdentities,
+  structuredWorkerIdentityFromRow,
   structuredWorkerProcessIncarnation,
   type StructuredWorkerIdentity
 } from './structured-worker-identity'
@@ -65,7 +63,8 @@ export function readStructuredAgentSessionRecord(
 /** Registry entry for a handle, rehydrated from the durable row when this process restarted. */
 export function resolveStructuredWorkerIdentity(
   handle: string,
-  db: OrchestrationDb | null | undefined
+  db: OrchestrationDb | null | undefined,
+  readOnly = false
 ): StructuredWorkerIdentity | null {
   if (!isStructuredWorkerHandle(handle)) {
     return null
@@ -75,7 +74,7 @@ export function resolveStructuredWorkerIdentity(
     return known
   }
   const row = db?.getWorkerTerminalResourceByHandle?.(handle)
-  return row ? structuredWorkerIdentities.rehydrate(row) : null
+  return row ? readWorkerIdentityRow(row, readOnly) : null
 }
 
 /** The worker a session runs for: minted for it, or one a `/clear` continued into it. */
@@ -93,7 +92,8 @@ export function resolveStructuredWorkerIdentityForSession(
 /** The worker minted for a lineage root session, rehydrated from its durable row after a restart. */
 export function resolveStructuredWorkerIdentityForRoot(
   rootSessionId: string,
-  db: SessionPartyReader | null | undefined
+  db: SessionPartyReader | null | undefined,
+  readOnly = false
 ): StructuredWorkerIdentity | null {
   const known = structuredWorkerIdentities.getBySessionId(rootSessionId)
   if (known) {
@@ -102,18 +102,14 @@ export function resolveStructuredWorkerIdentityForRoot(
   const row = db?.getWorkerTerminalResourceByProcessIncarnation?.(
     structuredWorkerProcessIncarnation(rootSessionId)
   )
-  return row ? structuredWorkerIdentities.rehydrate(row) : null
+  return row ? readWorkerIdentityRow(row, readOnly) : null
 }
 
-/** Recorded workers must retain handle identity; a missing handle cannot turn one into an ordinary chat caller. */
-export function isRecordedStructuredWorkerSession(
-  sessionId: OrcaSessionId,
-  db: SessionPartyReader
-): boolean {
-  return db.hasRecordedStructuredWorkerSession(
-    sessionId,
-    structuredWorkerProcessIncarnation(sessionId)
-  )
+function readWorkerIdentityRow(
+  row: Parameters<typeof structuredWorkerIdentityFromRow>[0],
+  readOnly: boolean
+): StructuredWorkerIdentity | null {
+  return readOnly ? structuredWorkerIdentityFromRow(row) : structuredWorkerIdentities.rehydrate(row)
 }
 
 /** The session running this worker now: the one minted for it, or its `/clear` successor. */
@@ -212,9 +208,10 @@ export function structuredWorkerCustody(
 export function resolveStructuredWorkerAuthority(
   handle: string,
   db: OrchestrationDb | null | undefined,
-  context?: StructuredWorkerReadContext
+  context?: StructuredWorkerReadContext,
+  readOnly = false
 ): StructuredWorkerAuthority | null {
-  const identity = resolveStructuredWorkerIdentity(handle, db)
+  const identity = resolveStructuredWorkerIdentity(handle, db, readOnly)
   const hold = identity ? holdStructuredWorker(identity, db, undefined, context) : null
   return hold?.kind === 'held' ? { identity: hold.identity, running: hold.running } : null
 }

@@ -6,11 +6,13 @@ import {
 } from '../../../../shared/agent-session/identity/orca-session-address'
 import { ORCHESTRATION_SESSION_CALLER_ERROR_CODES as CODES } from '../../../../shared/orchestration/orchestration-session-caller-codes'
 import {
-  isRecordedStructuredWorkerSession,
   resolveStructuredWorkerIdentity,
   resolveStructuredWorkerIdentityForRoot
 } from '../terminal-authority/structured-sessions/structured-worker-authority'
-import type { StructuredWorkerIdentity } from '../terminal-authority/structured-sessions/structured-worker-identity'
+import {
+  structuredWorkerProcessIncarnation,
+  type StructuredWorkerIdentity
+} from '../terminal-authority/structured-sessions/structured-worker-identity'
 import { canonicalOrcaSessionId } from './session-lineage/canonical-orca-session-id'
 import type { AgentSessionRecordReader } from './session-lineage/structured-session-lineage'
 import type { OrchestrationDb } from '../db/orchestration-db'
@@ -43,14 +45,17 @@ export const ORCHESTRATION_TARGET_PARAM: Readonly<
 export function resolveOrcaSessionParty(
   orcaSessionId: OrcaSessionId,
   db: SessionPartyReader | null | undefined,
-  store?: Pick<AgentSessionRecordReader, 'listRecords'> | null
+  store?: Pick<AgentSessionRecordReader, 'listRecords'> | null,
+  readOnly = false
 ): OrchestrationSessionParty {
   const id = canonicalOrcaSessionId(orcaSessionId, store)
-  const worker = resolveStructuredWorkerIdentityForRoot(id, db)
+  const worker = resolveStructuredWorkerIdentityForRoot(id, db, readOnly)
   const party = sessionPartyFromWorkerIdentity(
     id,
     worker,
-    !worker && Boolean(db && isRecordedStructuredWorkerSession(id, db))
+    // Recorded workers cannot fall back to a chat address when their handle is missing.
+    !worker &&
+      Boolean(db?.hasRecordedStructuredWorkerSession(id, structuredWorkerProcessIncarnation(id)))
   )
   if (!party) {
     // Without its handle, one worker would split into two parties and bind as a chat.
@@ -82,13 +87,14 @@ export function sessionPartyFromWorkerIdentity(
 /** The party an address names; a PTY handle is itself and costs no lookup. */
 export function resolveOrchestrationParty(
   address: string,
-  db: OrchestrationDb | null | undefined
+  db: OrchestrationDb | null | undefined,
+  readOnly = false
 ): OrchestrationParty {
   const orcaSessionId = parseOrcaSessionAddress(address)
   if (orcaSessionId) {
-    return resolveOrcaSessionParty(orcaSessionId, db)
+    return resolveOrcaSessionParty(orcaSessionId, db, undefined, readOnly)
   }
-  const worker = resolveStructuredWorkerIdentity(address, db)
+  const worker = resolveStructuredWorkerIdentity(address, db, readOnly)
   return {
     address,
     terminalHandle: address,
@@ -110,9 +116,10 @@ export function orcaSessionIdOrHandle(
 /** A caller named by a param: naming a chat's address proves nothing, unlike its own session id. */
 export function resolveDeclaredCallerParty(
   address: string,
-  db: OrchestrationDb | null | undefined
+  db: OrchestrationDb | null | undefined,
+  readOnly = false
 ): OrchestrationParty {
-  const party = resolveOrchestrationParty(address, db)
+  const party = resolveOrchestrationParty(address, db, readOnly)
   if (party.terminalHandle === null) {
     throw new OrchestrationError(
       CODES.chatNotDeclarable,

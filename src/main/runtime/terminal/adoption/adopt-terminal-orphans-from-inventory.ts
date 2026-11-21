@@ -228,7 +228,8 @@ export abstract class OrcaRuntimeWithAdoptTerminalOrphansFromInventory extends O
       resolveStructuredWorkerAuthority(
         handle,
         this.getOrchestrationDbIfAvailable?.() ?? null,
-        context?.structured
+        context?.structured,
+        readOnly
       )?.identity.paneKey ??
       this.getPaneKeyForTerminalHandle(handle, context, readOnly) ??
       this.getOrchestrationCompatibilitySshTerminal(handle, context)?.paneKey ??
@@ -243,7 +244,9 @@ export abstract class OrcaRuntimeWithAdoptTerminalOrphansFromInventory extends O
   ): string | null {
     const structured = resolveStructuredWorkerAuthority(
       handle,
-      this.getOrchestrationDbIfAvailable?.() ?? null
+      this.getOrchestrationDbIfAvailable?.() ?? null,
+      context?.structured,
+      readOnly
     )
     if (structured) {
       // Runtime-owned structured workers accept direct mail even at rest; sending starts their agent.

@@ -39,7 +39,8 @@ export abstract class OrcaRuntimeWithGetOrchestrationDispatchAuthority extends O
     const structured = resolveStructuredWorkerAuthority(
       handle,
       this.getOrchestrationDbIfAvailable?.() ?? null,
-      context?.structured
+      context?.structured,
+      readOnly
     )
     if (structured) {
       return structured.identity.processIncarnation
@@ -51,13 +52,10 @@ export abstract class OrcaRuntimeWithGetOrchestrationDispatchAuthority extends O
     if (pty?.incarnationId) {
       return `${pty.ptyId}:${pty.incarnationId}`
     }
-    if (!record?.ptyId) {
-      return (
-        this.getOrchestrationCompatibilitySshTerminal(handle, context)?.processIncarnation ?? null
-      )
-    }
     // Legacy providers retain the runtime/PTY/generation fence.
-    return `${this.runtimeId}:${record.ptyId}:${record.ptyGeneration}`
+    return record?.ptyId
+      ? `${this.runtimeId}:${record.ptyId}:${record.ptyGeneration}`
+      : (this.getOrchestrationCompatibilitySshTerminal(handle, context)?.processIncarnation ?? null)
   }
   abstract getAgentStatusOrchestrationContextForPaneKey(
     paneKey: string
@@ -132,7 +130,8 @@ export abstract class OrcaRuntimeWithGetOrchestrationDispatchAuthority extends O
     const structured = resolveStructuredWorkerAuthority(
       terminalHandle,
       this.getOrchestrationDbIfAvailable?.() ?? null,
-      context?.structured
+      context?.structured,
+      readOnly
     )
     if (structured) {
       return {

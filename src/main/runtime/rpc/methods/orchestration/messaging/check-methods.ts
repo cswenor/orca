@@ -38,6 +38,7 @@ import {
   resolveCheckDispatch
 } from './dispatch-mailbox-fence'
 import { assertSelectableMailboxHandle } from '../../../orchestration/compatibility/orchestration-legacy-process-identity'
+import { isEquivalentPaneKey } from '../../../../orchestration/db/pane-key-match'
 
 /** The ordinary consuming check and selective receipt replay authorize the same mailbox. */
 export function resolveMailboxCheckScope(
@@ -53,7 +54,9 @@ export function resolveMailboxCheckScope(
   const handle = paneOnly
     ? runtime.getExistingTerminalHandleForPaneKey(paneOnly)
     : (params.terminal ?? 'unknown')
-  if (!handle) {
+  const readOnly = params.ackIds !== undefined
+  const livePane = handle ? runtime.getTerminalPaneKey(handle, undefined, readOnly) : null
+  if (!handle || (paneOnly && (!livePane || !isEquivalentPaneKey(livePane, paneOnly)))) {
     throw new OrchestrationError('consumer_fenced', 'No live pane caller. Pass --terminal.', {
       effectsApplied: false
     })
@@ -68,11 +71,10 @@ export function resolveMailboxCheckScope(
   if (params.ackIds) {
     assertSelectableMailboxHandle(db, handle)
   }
-  const readOnly = params.ackIds !== undefined
-  const livePane = runtime.getTerminalPaneKey(handle, undefined, readOnly)
   const caller = orchestrationCallerIdentity(runtime, {
     handle,
     session: orchestrationCaller,
+    readOnly,
     // A live runtime handle is authoritative; pane metadata is only the restart fallback.
     paneKey: livePane ?? params.terminalPaneKey
   })

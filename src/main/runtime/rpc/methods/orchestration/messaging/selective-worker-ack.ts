@@ -26,6 +26,7 @@ export function acknowledgeSelectedWorkerMail(args: WorkerMailboxCheckInput, ids
         sessionId: orchestrationCallerIdentity(args.runtime, {
           handle,
           paneKey,
+          readOnly: true,
           session: args.reader
         }).orcaSessionId
       })

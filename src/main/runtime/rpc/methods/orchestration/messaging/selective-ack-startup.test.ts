@@ -5,8 +5,12 @@ import { ORCHESTRATION_METHODS } from '../orchestration'
 import { ORCHESTRATION_CONTRACT_VERSION } from '../../../../../../shared/orchestration/orchestration-runtime-capabilities'
 import { OrchestrationMailboxOwner } from '../../../../orchestration/mailbox/routing/mailbox-owner'
 import { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
-import { MAILBOX_POINTER_ENTER_ATTEMPTED } from '../../../../orchestration/db/messages/mailbox-pointer-enter-state'
+import {
+  MAILBOX_POINTER_ENTER_ATTEMPTED,
+  MAILBOX_POINTER_WRITE_ATTEMPTED
+} from '../../../../orchestration/db/messages/mailbox-pointer-enter-state'
 import { createRootDispatch } from '../../../../orchestration/db/root-dispatch-test-fixture'
+import { OrcaRuntimeService } from '../../../../orca-runtime'
 import { markUnreadFollowUpMail } from '../../../../orchestration/db/dispatch-context/worker-follow-up-lineage'
 import { continueAllUnreadWorkerMail } from './settled-worker-follow-through'
 import {
@@ -14,13 +18,18 @@ import {
   createRuntime,
   driveToLiveIdle,
   pointerCount,
+  LEAF_ID,
   PANE_KEY,
   PTY_ID,
   registerSecondPane,
+  SECOND_LEAF_ID,
   SECOND_PANE_KEY,
   SECOND_PTY_ID,
+  SECOND_TAB_ID,
   SECOND_TERMINAL_HANDLE,
-  TERMINAL_HANDLE
+  TAB_ID,
+  TERMINAL_HANDLE,
+  WORKTREE_ID
 } from '../../../../orchestration/mailbox/terminal-pointer/orchestration-mailbox-notification-test-harness'
 import { WRITE_ACCEPTED } from '../../../../../../shared/terminal/pty/lifecycle/pty-write-settlement'
 
@@ -653,6 +662,104 @@ it.each(['headless', 'window', 'reload', 'explicit'])('marks %s mail', async (mo
     }
     expect(write).not.toHaveBeenCalled()
   } finally {
+    db.close()
+  }
+})
+
+it('refuses a pane-only acknowledgment from a second leaf showing the coordinator PTY', async () => {
+  const db = new OrchestrationDb(':memory:')
+  try {
+    const runtime = new OrcaRuntimeService(null)
+    runtime.registerPty(PTY_ID, WORKTREE_ID, null, {
+      tabId: TAB_ID,
+      leafId: LEAF_ID,
+      incarnationId: 'same-pty'
+    })
+    runtime.registerPreAllocatedHandleForPty(PTY_ID, TERMINAL_HANDLE)
+    runtime.attachWindow(1)
+    const panes = [
+      { tabId: TAB_ID, leafId: LEAF_ID, paneRuntimeId: 1 },
+      { tabId: SECOND_TAB_ID, leafId: SECOND_LEAF_ID, paneRuntimeId: 2 }
+    ]
+    await runtime.syncWindowGraph(1, {
+      tabs: panes.map(({ tabId, leafId }) => ({
+        tabId,
+        worktreeId: WORKTREE_ID,
+        title: 'Codex',
+        activeLeafId: leafId,
+        layout: null
+      })),
+      leaves: panes
+        .toReversed()
+        .map((pane) => ({ ...pane, worktreeId: WORKTREE_ID, ptyId: PTY_ID }))
+    })
+    expect(runtime.getTerminalPaneKey(TERMINAL_HANDLE, undefined, true)).toBe(PANE_KEY)
+    runtime.setOrchestrationDb(db)
+    const run = createBoundRun(db, 'Original pane only')
+    const selected = db.insertMessage({
+      from: 'term_sender',
+      to: `run:${run.id}`,
+      runId: run.id,
+      subject: 'Keep in original pane'
+    })
+    const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+    const result = await dispatcher.dispatch({
+      id: 'rpc_alias_pane',
+      authToken: 'test',
+      method: 'orchestration.ackMessages',
+      params: { terminalPaneKey: SECOND_PANE_KEY, ackIds: [selected.id] },
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+      orchestrationRequestId: 'alias_pane'
+    })
+    if (result.ok || result.error.code !== 'consumer_fenced') {
+      throw new Error(JSON.stringify(result))
+    }
+    expect(result.error.data).toMatchObject({ effectsApplied: false })
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+  } finally {
+    db.close()
+  }
+})
+
+it('ordinary PTY retirement releases a typed pointer after selective acknowledgment', async () => {
+  vi.useFakeTimers()
+  const db = new OrchestrationDb(':memory:')
+  try {
+    const { runtime, write } = await createRuntime(db, { launchAgent: null })
+    const run = createBoundRun(db, 'Cancel pointer')
+    const selected = db.insertMessage({
+      from: 'term_sender',
+      to: `run:${run.id}`,
+      runId: run.id,
+      subject: 'Typed status'
+    })
+    await driveToLiveIdle(runtime)
+    expect(pointerCount(write)).toBe(1)
+    await expect(
+      new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS }).dispatch({
+        id: 'rpc_canceled_pointer',
+        authToken: 'test',
+        method: 'orchestration.ackMessages',
+        params: { terminal: TERMINAL_HANDLE, ackIds: [selected.id] },
+        orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+        orchestrationRequestId: 'canceled_pointer'
+      })
+    ).resolves.toMatchObject({ ok: true })
+    expect(db.getMessageById(selected.id)).toMatchObject({
+      read: 1,
+      pointer_enter_pending: MAILBOX_POINTER_WRITE_ATTEMPTED
+    })
+    runtime.onPtyExit(PTY_ID, 0)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(write.mock.calls.some(([, payload]) => payload === '\r')).toBe(false)
+    expect(db.getMessageById(selected.id)).toMatchObject({
+      read: 1,
+      pointer_enter_pending: 0,
+      pointer_pty_id: null,
+      pointer_process_incarnation: null
+    })
+  } finally {
+    vi.useRealTimers()
     db.close()
   }
 })
