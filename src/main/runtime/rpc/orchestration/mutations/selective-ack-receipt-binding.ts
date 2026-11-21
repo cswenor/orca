@@ -41,6 +41,12 @@ export async function runSelectiveAckMutation(
     )
   }
   const db = runtime.getOrchestrationDb()
+  const recovery = runtime.finishOrchestrationStartupMailRecovery()
+  if (recovery) {
+    await recovery
+  }
+  const readBinding = () => selectiveAckReceiptBinding(runtime, request, params, caller)
+  const target = readBinding()
   const fingerprint = callerFingerprint ?? db.readLocalMutationCallerFingerprint()
   if (fingerprint === undefined) {
     throw new Error('Local mutation caller identity was not initialized.')
@@ -59,8 +65,6 @@ export async function runSelectiveAckMutation(
       { effectsApplied: false }
     )
   }
-  const readBinding = () => selectiveAckReceiptBinding(runtime, request, params, caller)
-  const target = readBinding()
   const binding = hashCanonical(target)
   const { method } = request
   const payloadHash = hashCanonical({
@@ -153,7 +157,11 @@ function selectiveAckReceiptBinding(
   const lease =
     sessionCallerOf(caller)?.revalidateAckLease?.() ??
     (structuredSessionId ? currentWorkerLease(structuredSessionId) : undefined)
-  const replayable = lease !== undefined || (structuredSessionId === null && process !== null)
+  const replayable =
+    lease !== undefined ||
+    (structuredSessionId === null &&
+      process !== null &&
+      runtime.getLiveTerminalPaneKey(handle) !== null)
   const target = {
     process,
     lease,

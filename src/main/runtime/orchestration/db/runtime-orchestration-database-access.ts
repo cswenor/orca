@@ -13,6 +13,7 @@ import { OrcaRuntimeWithAutomationApiOperations } from '../../workspaces/persist
 
 export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWithAutomationApiOperations {
   private orchestrationDbMaintenance: OrchestrationDbMaintenance | undefined
+  private finishRestoredWorkerMail: (() => Promise<void>) | undefined
 
   abstract ensureOrchestrationFederationRelay(
     runId?: string,
@@ -27,7 +28,7 @@ export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWith
   ): boolean
 
   /** Mail a worker left unread when it reported before a restart still continues it. */
-  protected abstract continueRestoredWorkerMail(db: OrchestrationDb): void
+  protected abstract continueRestoredWorkerMail(db: OrchestrationDb): () => Promise<void>
 
   // Defer until userData is final; tests can inject an in-memory DB.
   getOrchestrationDb(): OrchestrationDb {
@@ -51,11 +52,21 @@ export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWith
       this.bindWorkerTerminalAutoRelease(this._orchestrationDb)
       // Recover deadlines armed before a restart.
       getWorkerTerminalAutoReleaseScheduler(this).rearm()
-      this.continueRestoredWorkerMail(this._orchestrationDb)
+      this.finishRestoredWorkerMail = this.continueRestoredWorkerMail(db)
       // No terminal prompt's hold survives a restart; its card must not stay answerable.
       closeOrphanedTerminalApprovals(this._orchestrationDb)
     }
     return this._orchestrationDb
+  }
+
+  /** Finish the already-scheduled cold-open pass before any mark-only mailbox snapshot. */
+  finishOrchestrationStartupMailRecovery(): Promise<void> | undefined {
+    const finish = this.finishRestoredWorkerMail
+    return finish?.().finally(() => {
+      if (this.finishRestoredWorkerMail === finish) {
+        this.finishRestoredWorkerMail = undefined
+      }
+    })
   }
 
   /** The database, opened only if it already exists: a profile without one has no mail to redrive. */
@@ -66,6 +77,7 @@ export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWith
   }
 
   setOrchestrationDb(db: OrchestrationDb): void {
+    this.finishRestoredWorkerMail = undefined
     this.orchestrationDbMaintenance?.stop()
     this.orchestrationDbMaintenance = undefined
     this.orchestrationFederation.resetForDatabaseChange()

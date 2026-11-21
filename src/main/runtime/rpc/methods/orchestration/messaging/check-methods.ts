@@ -50,6 +50,13 @@ export function resolveMailboxCheckScope(
   orchestrationCaller: OrchestrationEntryCaller | undefined
 ) {
   const handle = params.terminal ?? 'unknown'
+  if (params.ackIds && (handle.startsWith('run:') || handle.startsWith('dispatch:'))) {
+    throw new OrchestrationError(
+      'invalid_argument',
+      'Selective acknowledgment requires a terminal, not a role mailbox address. Use the Run coordinator or Dispatch worker terminal.',
+      { effectsApplied: false }
+    )
+  }
   const livePane = runtime.getTerminalPaneKey(handle)
   const caller = orchestrationCallerIdentity(runtime, {
     handle,

@@ -48,22 +48,20 @@ export function waitForRestoredWorkerCallerIdentity(
   if (!isSelectiveAckRequest(request)) {
     return restore
   }
-  const initializeDeclaredWorker = (): Promise<void> | null => {
+  const initializeDeclaredWorker = async (): Promise<void> => {
     const handle = terminal?.trim() || 'unknown'
     const declaredPane = params.terminalPaneKey
     const pane =
       runtime.getTerminalPaneKey(handle) ??
       (typeof declaredPane === 'string' ? declaredPane.trim() : undefined)
-    return isStructuredWorkerHandle(handle) ||
+    if (
+      isStructuredWorkerHandle(handle) ||
       (pane &&
         runtime.getOrchestrationDb().getActiveDispatchForIdentity(handle, pane)
           ?.assignee_orca_session_id)
-      ? runtime.ensureStructuredAgentSessionHost()
-      : null
+    ) {
+      await runtime.ensureStructuredAgentSessionHost()
+    }
   }
-  return restore
-    ? restore.then(async () => {
-        await initializeDeclaredWorker()
-      })
-    : initializeDeclaredWorker()
+  return restore ? restore.then(initializeDeclaredWorker) : initializeDeclaredWorker()
 }

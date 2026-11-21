@@ -217,7 +217,7 @@ export const ORCHESTRATION_SEND_METHODS = [
           // The mail started the worker's next turn itself, so nothing holds it; `next` stays last.
           if (followUp?.kind === 'started') {
             if (typeof followUp.receipt.dispatchId === 'string') {
-              passHeldWorkerMail(runtime, db, followUp.receipt.dispatchId)
+              void passHeldWorkerMail(runtime, db, followUp.receipt.dispatchId)
             }
             return followUp.receipt
           }

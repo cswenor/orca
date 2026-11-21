@@ -163,6 +163,38 @@ it('uses the same stable pane requirement as an ordinary consuming check', async
   expect(db.getMessageById(selected.id)?.read).toBe(0)
 })
 
+it('validates the selection only after pending startup mail recovery has completed', async () => {
+  const { db, runtime } = harness.setup()
+  const selected = db.insertMessage({
+    from: 'term_sender',
+    to: 'term_coord',
+    subject: 'leave unread when moved during recovery'
+  })
+  const gate = Promise.withResolvers<void>()
+  const entered = Promise.withResolvers<void>()
+  vi.spyOn(runtime, 'finishOrchestrationStartupMailRecovery').mockImplementation(async () => {
+    entered.resolve()
+    await gate.promise
+    db.db.prepare('UPDATE messages SET to_handle = ? WHERE id = ?').run('term_other', selected.id)
+  })
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+  const result = dispatcher.dispatch({
+    id: 'rpc_recover_mail',
+    authToken: 'test',
+    method: 'orchestration.ackMessages',
+    params: { terminal: 'term_coord', ackIds: [selected.id], run: 'run_unbound' },
+    orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+    orchestrationRequestId: 'recover_mail'
+  })
+  await Promise.race([entered.promise, result])
+  gate.resolve()
+  await expect(result).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'invalid_argument', data: { effectsApplied: false } }
+  })
+  expect(db.getMessageById(selected.id)).toMatchObject({ to_handle: 'term_other', read: 0 })
+})
+
 it.each(['worker_done', 'heartbeat'] as const)(
   'refuses a mixed selection containing a %s lifecycle report without taking mail',
   async (type) => {
@@ -488,6 +520,11 @@ it('replays only on the original process and implicit Run', async () => {
     ok: false,
     error: { code: 'forbidden', data: { effectsApplied: false } }
   })
+  vi.mocked(runtime.getLiveTerminalPaneKey).mockReturnValueOnce(null)
+  await expect(acknowledge()).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'request_mismatch' }
+  })
   incarnation = 'pty:replacement'
   await expect(acknowledge()).resolves.toMatchObject({
     ok: false,
@@ -504,6 +541,19 @@ it('replays only on the original process and implicit Run', async () => {
     error: { code: 'request_mismatch' }
   })
 })
+
+it.each(['run:example', 'dispatch:example'])(
+  'rejects %s as a selective terminal',
+  async (terminal) => {
+    const { ctx } = harness.setup(false)
+    await expect(
+      harness.call('orchestration.ackMessages', { terminal, ackIds: ['msg_example'] }, ctx)
+    ).rejects.toMatchObject({
+      code: 'invalid_argument',
+      message: expect.stringContaining('not a role mailbox address')
+    })
+  }
+)
 
 it('allows a fresh acknowledgment with ordinary pane fallback but cannot replay without a process', async () => {
   const { db, runtime } = harness.setup(false)
