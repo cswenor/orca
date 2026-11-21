@@ -73,9 +73,9 @@ export class OrchestrationStructuredMailboxPointerDelivery<
     return target !== null
   }
 
-  /** Startup waits for the existing redrive, including any queued follow-through. */
-  whenIdle(mailboxHandle: string): Promise<void> | undefined {
-    return this.redrives.whenIdle(mailboxHandle)
+  /** Observe recovery without attaching later arrivals to that startup wait. */
+  whenIdle(mailbox: string): Promise<void> | undefined {
+    return this.redrives.whenIdle(mailbox, () => this.deps.getDb()?.getMessageSequenceWatermark())
   }
 
   /** Retry mail parked on this session's settlement or reattach journal edge. */
@@ -243,6 +243,7 @@ export class OrchestrationStructuredMailboxPointerDelivery<
         offered.add(key)
         // Parked first, so a send that throws is retried on this session's next journal edge.
         this.parking.park(mailboxHandle, target.sessionId, currentReservedTypes)
+        this.redrives.beforeOffering(mailboxHandle, message.sequence)
         if ((await this.admit(db, mailboxHandle, target, message, senderSnapshot)) === 'park') {
           // An edge during the send may have taken the entry; the refusal still waits for the next one.
           this.parking.park(mailboxHandle, target.sessionId, currentReservedTypes)

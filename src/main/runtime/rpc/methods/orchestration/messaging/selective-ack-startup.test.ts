@@ -6,6 +6,9 @@ import { ORCHESTRATION_CONTRACT_VERSION } from '../../../../../../shared/orchest
 import { OrchestrationMailboxOwner } from '../../../../orchestration/mailbox/routing/mailbox-owner'
 import { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import { MAILBOX_POINTER_ENTER_ATTEMPTED } from '../../../../orchestration/db/messages/mailbox-pointer-enter-state'
+import { createRootDispatch } from '../../../../orchestration/db/root-dispatch-test-fixture'
+import { markUnreadFollowUpMail } from '../../../../orchestration/db/dispatch-context/worker-follow-up-lineage'
+import { continueAllUnreadWorkerMail } from './settled-worker-follow-through'
 import {
   createBoundRun,
   createRuntime,
@@ -313,6 +316,59 @@ it.each([false, true])('settles a restored PTY pointer before ACK (chat: %s)', a
   }
 })
 
+it('joins the PTY notice created by restored worker recovery', async () => {
+  vi.useFakeTimers()
+  const db = new OrchestrationDb(':memory:')
+  const probe = Promise.withResolvers<boolean>()
+  try {
+    const { runtime } = await createRuntime(db)
+    await driveToLiveIdle(runtime)
+    const write = vi.fn((_ptyId: string, _data: string) => true)
+    runtime.setPtyController({
+      write,
+      writeWithSettlement: (ptyId, data) => {
+        write(ptyId, data)
+        return WRITE_ACCEPTED
+      },
+      probePtyLiveness: () => probe.promise,
+      kill: vi.fn(),
+      getForegroundProcess: async () => null
+    })
+    const run = createBoundRun(db, 'Interrupted worker')
+    const task = db.createTask({ runId: run.id, spec: 'Restore worker' })
+    const worker = createRootDispatch(db, task.id, 'term_worker')
+    db.db
+      .prepare(
+        `INSERT INTO worker_dispatches (dispatch_id, runtime_epoch, state, stage, agent_terminal_handle)
+         VALUES (?, 'previous-epoch', 'starting', 'authority_attached', 'term_worker')`
+      )
+      .run(worker.id)
+    db.insertMessage({
+      from: TERMINAL_HANDLE,
+      to: `dispatch:${worker.id}`,
+      runId: run.id,
+      subject: 'Mail already assigned to the worker'
+    })
+    markUnreadFollowUpMail(db, worker.id)
+    const done = vi.fn()
+    const recovery = continueAllUnreadWorkerMail(runtime, db).then(done)
+    await vi.advanceTimersByTimeAsync(2_001)
+    expect(db.getUnreadMessages(`run:${run.id}`)).toMatchObject([
+      { subject: 'Mail did not reach the finished worker' }
+    ])
+    expect(done).not.toHaveBeenCalled()
+    probe.resolve(true)
+    await vi.advanceTimersByTimeAsync(2_001)
+    await recovery
+    expect(pointerCount(write)).toBe(1)
+    expect(write.mock.calls.filter(([, data]) => data === '\r')).toHaveLength(1)
+  } finally {
+    probe.resolve(true)
+    vi.useRealTimers()
+    db.close()
+  }
+})
+
 it.each(['headless', 'window', 'reload', 'explicit'])('marks %s mail', async (mode) => {
   const db = new OrchestrationDb(':memory:')
   try {
@@ -360,4 +416,31 @@ it.each(['headless', 'window', 'reload', 'explicit'])('marks %s mail', async (mo
   } finally {
     db.close()
   }
+})
+
+it('an ordinary Run check takes the next batch if a selective ACK empties its claim', async () => {
+  const { db, ctx, activeRunId } = harness.setup()
+  const terminal = 'term_coord'
+  const params = { terminal, run: activeRunId }
+  const insert = (subject: string) =>
+    db.insertMessage({
+      from: 'term_sender',
+      to: `run:${activeRunId}`,
+      runId: activeRunId,
+      subject
+    })
+  const selected = insert('Stale status')
+  const original = db.getOrCreateMailboxDelivery.bind(db)
+  let marked: Promise<unknown> | undefined
+  let newerId: string | undefined
+  vi.spyOn(db, 'getOrCreateMailboxDelivery').mockImplementationOnce((options) => {
+    const claim = original(options)
+    expect(claim?.messages.map(({ id }) => id)).toEqual([selected.id])
+    newerId = insert('Keep this for the ordinary check').id
+    marked = harness.call('orchestration.ackMessages', { ...params, ackIds: [selected.id] }, ctx)
+    return claim
+  })
+  const checked = await harness.call('orchestration.check', { ...params, wait: true }, ctx)
+  await expect(marked).resolves.toMatchObject({ markedIds: [selected.id] })
+  expect(checked).toMatchObject({ count: 1, messages: [{ id: newerId }] })
 })

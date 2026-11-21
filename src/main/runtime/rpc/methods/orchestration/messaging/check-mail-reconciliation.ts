@@ -263,42 +263,48 @@ export class CheckMailReconciliation {
     record?: (response: NonNullable<MailboxDeliveryBatch['finalResponse']>) => void
     wake?: MessageWake
   }): Promise<MailboxDeliveryBatch | undefined> {
-    this.assertCurrent(args.revalidate)
     const key = `${args.mailbox.mailboxHandle}:${args.mailbox.consumerGeneration}`
     const select = () => this.db.getOrCreateMailboxDelivery(args.mailbox)
-    const claim = args.wake ? args.wake.claim(key, select) : select()
-    if (!claim) {
-      return undefined
-    }
-    const shared = args.wake?.final(key)
-    if (shared) {
-      args.record?.(args.respond(shared))
-      return shared
-    }
-    return this.reconcile({
-      selected: claim.messages,
-      direct: false,
-      claimId: claim.delivery.id,
-      revalidate: args.revalidate,
-      commit: (take) => {
-        const shared = args.wake?.final(key)
-        if (shared) {
-          args.record?.(args.respond(shared))
-          return shared
+    for (;;) {
+      this.assertCurrent(args.revalidate)
+      const claim = args.wake ? args.wake.claim(key, select) : select()
+      if (!claim) {
+        return undefined
+      }
+      const shared = args.wake?.final(key)
+      if (shared) {
+        args.record?.(args.respond(shared))
+        return shared
+      }
+      const batch = await this.reconcile({
+        selected: claim.messages,
+        direct: false,
+        claimId: claim.delivery.id,
+        revalidate: args.revalidate,
+        commit: (take) => {
+          const shared = args.wake?.final(key)
+          if (shared) {
+            args.record?.(args.respond(shared))
+            return shared
+          }
+          // Publish the shared result only after the take and its receipt have committed.
+          return args.wake ? args.wake.share(key, take) : take()
+        },
+        finalize: (messages) => {
+          const taken = this.db.finalizeMailboxDelivery({ ...args.mailbox, claim, messages })
+          if (!taken || (!args.wake && taken.messages.length === 0)) {
+            return undefined
+          }
+          taken.finalResponse = args.respond(taken)
+          args.record?.(args.respond(taken))
+          return taken
         }
-        // Publish the shared result only after the take and its receipt have committed.
-        return args.wake ? args.wake.share(key, take) : take()
-      },
-      finalize: (messages) => {
-        const batch = this.db.finalizeMailboxDelivery({ ...args.mailbox, claim, messages })
-        if (batch) {
-          batch.finalResponse = args.respond(batch)
-        }
-        if (batch) {
-          args.record?.(args.respond(batch))
-        }
+      })
+      if (batch || args.wake) {
         return batch
       }
-    })
+      // Before waiting, an exhausted claim cannot hide newer eligible unread mail.
+      // Once woken, this notification's shared claim remains fixed for all its waiters.
+    }
   }
 }

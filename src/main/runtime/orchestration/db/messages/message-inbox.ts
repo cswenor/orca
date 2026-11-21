@@ -144,6 +144,11 @@ export function getUndeliveredUnreadMailboxHandles(this: OrchestrationDb): strin
   ).map((row) => row.to_handle)
 }
 
+export function getMessageSequenceWatermark(this: OrchestrationDb): number {
+  const sequence = this.db.prepare('SELECT MAX(sequence) AS sequence FROM messages').get()?.sequence
+  return typeof sequence === 'number' ? sequence : 0
+}
+
 export function getAllMessages(this: OrchestrationDb, toHandle: string, limit = 20): MessageRow[] {
   return exposeMessageListTimestamps(
     this.db
@@ -289,6 +294,7 @@ export type MessageInboxMethods = {
   convertLifecycleMessageToRejection: typeof convertLifecycleMessageToRejection
   getUndeliveredUnreadMessages: typeof getUndeliveredUnreadMessages
   getUndeliveredUnreadMailboxHandles: typeof getUndeliveredUnreadMailboxHandles
+  getMessageSequenceWatermark: typeof getMessageSequenceWatermark
   getAllMessages: typeof getAllMessages
   getMessageById: typeof getMessageById
   markAsRead: typeof markAsRead
@@ -307,6 +313,7 @@ export function attachMessageInbox(ctor: { prototype: object }): void {
     convertLifecycleMessageToRejection,
     getUndeliveredUnreadMessages,
     getUndeliveredUnreadMailboxHandles,
+    getMessageSequenceWatermark,
     getAllMessages,
     getMessageById,
     markAsRead,

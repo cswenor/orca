@@ -183,19 +183,32 @@ export abstract class OrcaRuntimeWithRefreshFloatingWorkspacePtyLiveness extends
 
   // Keep the notification hook on the runtime as well as on the installed
   // command surface: exit escalation can wake an in-flight --wait directly.
-  notifyMessageArrived(handle: string, messageType?: string): void {
+  notifyMessageArrived(
+    handle: string,
+    messageType?: string,
+    waitForRecovery = false
+  ): Promise<void> | undefined {
     // Heartbeats are stored handled and only record liveness; they never wake a mailbox.
     if (messageType === 'heartbeat') {
       return
     }
+    let scheduled: Promise<void> | undefined
     if (!handle.startsWith('dispatch:')) {
       this.mailPointerRepointScheduler.schedule(handle)
+      scheduled = waitForRecovery ? this.mailPointerRepointScheduler.completion(handle) : undefined
     } else {
       // A waiting ask rechecks its question, which a settled Dispatch has closed.
       this.messageWaiters.notifyPrefix(questionAnswerWaitPrefix(handle.slice('dispatch:'.length)))
       // A helper that settled may have been all that held back its creator's report.
       reconsiderCreatorRest(handle, this.workerTurnStopReportDeps)
     }
-    this.orchestrationMailboxNotifications.notifyMessageArrived(handle, messageType)
+    const current = this.orchestrationMailboxNotifications.notifyMessageArrived(
+      handle,
+      messageType,
+      waitForRecovery
+    )
+    return scheduled && current
+      ? Promise.all([scheduled, current]).then(() => undefined)
+      : (scheduled ?? current)
   }
 }

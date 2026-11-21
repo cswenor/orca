@@ -18,9 +18,7 @@ import {
 } from '../../../../orchestration/addressing/orchestration-caller-identity'
 import { resolveOrcaSessionParty } from '../../../../orchestration/addressing/orchestration-party'
 import { readStructuredAgentSessionRecord } from '../../../../orchestration/terminal-authority/structured-sessions/structured-worker-authority'
-import { createHash } from 'node:crypto'
-import { escalateWorkerFailure } from '../../../../orchestration/workers/reports/worker-failure-escalation'
-import { dispatchReportMailbox } from '../../../../orchestration/workers/reports/dispatch-report-mailbox'
+import { noticeUnreadMailNotContinued } from './worker-follow-up-failure-notice'
 import {
   planWorkerFollowUp,
   startWorkerFollowUp,
@@ -90,26 +88,26 @@ async function continueUnreadMail(
   ) {
     if (worker.agent_terminal_handle) {
       // Its agent may still run, so only the coordinator can tell whether to retry.
-      noticeUnreadMailNotContinued(
+      return noticeUnreadMailNotContinued(
         runtime,
         db,
         dispatchId,
-        'Orca restarted while its follow-up was starting'
+        'Orca restarted while its follow-up was starting',
+        restoring
       )
-      return
     }
     // Interrupted before it placed an agent, so nothing runs and the start can be retried.
     db.failWorkerStart(dispatchId, worker.stage, 'Orca restarted before this follow-up started.')
   }
   if (custodyOf(db, dispatchId) === 'reported' && !hasNewUnreadFollowUpMail(db, dispatchId)) {
     // Kept marked, so the coordinator's next send carries it; another short Task would only repeat this one.
-    noticeUnreadMailNotContinued(
+    return noticeUnreadMailNotContinued(
       runtime,
       db,
       dispatchId,
-      'its follow-up reported without reading the mail it was started for'
+      'its follow-up reported without reading the mail it was started for',
+      restoring
     )
-    return
   }
   let plan: ReturnType<typeof planWorkerFollowUp> = undefined
   let outcome: WorkerFollowUpOutcome | undefined
@@ -130,34 +128,40 @@ async function continueUnreadMail(
         : plan
   } catch (error) {
     // The mail stays unread and marked, so the next start, report replay or send retries it.
-    noticeUnreadMailNotContinued(
+    const recovery = noticeUnreadMailNotContinued(
       runtime,
       db,
       dispatchId,
-      error instanceof Error ? error.message : String(error)
+      error instanceof Error ? error.message : String(error),
+      restoring
     )
     const claimed = plan?.kind === 'start' ? getFollowUpDispatch(db, plan.latest.id) : undefined
     if (claimed) {
       markUnreadFollowUpMail(db, claimed.id)
     }
-    return
+    return recovery
   }
   const startedId = outcome?.kind === 'started' ? outcome.receipt.dispatchId : undefined
   const followUpId = outcome?.kind === 'steer' ? outcome.dispatchId : startedId
   if (typeof followUpId !== 'string') {
     return
   }
+  let recovery: Promise<void> | undefined
   if (outcome?.kind === 'started' && custodyOf(db, followUpId) === 'failed') {
     // The mail it took stays unread on it, marked below, for the next send.
     const worker = db.getWorkerDispatch(followUpId)
-    noticeUnreadMailNotContinued(
+    recovery = noticeUnreadMailNotContinued(
       runtime,
       db,
       dispatchId,
-      worker?.last_error ?? worker?.state ?? 'unknown'
+      worker?.last_error ?? worker?.state ?? 'unknown',
+      restoring
     )
   }
-  return passHeldWorkerMail(runtime, db, followUpId, restoring)
+  const handback = passHeldWorkerMail(runtime, db, followUpId, restoring)
+  return handback && recovery
+    ? Promise.all([handback, recovery]).then(() => undefined)
+    : (handback ?? recovery)
 }
 
 /** Whether a follow-up took over its worker: ready or already reported, failed, or still starting. */
@@ -196,6 +200,7 @@ export function passHeldWorkerMail(
     return runtime.withdrawStaleChatMail(lineageMailboxes, restoring)
   }
   const worker = db.getWorkerDispatch(followUpId)
+  const notices: Promise<void>[] | undefined = restoring ? [] : undefined
   for (const source of [...seen].slice(1)) {
     const first = db.getDispatchContextById(source)?.follow_up_mail_at
       ? db.getUnreadMessages(`dispatch:${source}`, [...FOLLOW_UP_MESSAGE_TYPES])[0]
@@ -203,7 +208,10 @@ export function passHeldWorkerMail(
     if (first) {
       if (custody === 'failed') {
         const reason = worker?.last_error ?? worker?.state ?? 'unknown'
-        noticeUnreadMailNotContinued(runtime, db, source, reason)
+        const notice = noticeUnreadMailNotContinued(runtime, db, source, reason, restoring)
+        if (notice) {
+          notices?.push(notice)
+        }
       }
       let page
       do {
@@ -228,7 +236,10 @@ export function passHeldWorkerMail(
     // A follow-up that already finished holds this mail as any finished worker does.
     markUnreadFollowUpMail(db, followUpId)
   }
-  const cleanup = runtime.withdrawStaleChatMail(lineageMailboxes, restoring)
+  const withdrawal = runtime.withdrawStaleChatMail(lineageMailboxes, restoring)
+  const cleanup = notices?.length
+    ? Promise.all(withdrawal ? [...notices, withdrawal] : notices).then(() => undefined)
+    : withdrawal
   if (custody === 'ready') {
     // Its Task is in: a chat's moved mail follows it, each message whole.
     const mailbox = `dispatch:${followUpId}`
@@ -240,37 +251,6 @@ export function passHeldWorkerMail(
   }
   const next = () => continueUnreadWorkerMail(runtime, db, followUpId, restoring)
   return cleanup ? cleanup.then(next) : next()
-}
-
-/** Nothing is lost silently: the coordinator hears that its mail did not reach the worker, once per batch. */
-function noticeUnreadMailNotContinued(
-  runtime: OrcaRuntimeService,
-  db: OrchestrationDb,
-  dispatchId: string,
-  reason: string
-): void {
-  const dispatch = db.getDispatchContextById(dispatchId)
-  if (!dispatch) {
-    return
-  }
-  escalateWorkerFailure(
-    db,
-    dispatch,
-    {
-      id: `msg_followup_${createHash('sha256')
-        .update(JSON.stringify([dispatchId, dispatch.follow_up_mail_at]))
-        .digest('hex')
-        .slice(0, 24)}`,
-      from: `dispatch:${dispatchId}`,
-      mailbox: () => dispatchReportMailbox(db, dispatch),
-      describe: (task) => ({
-        subject: 'Mail did not reach the finished worker',
-        body: `Orca could not continue the worker of ${task} with the mail it had not read before reporting: ${reason}. The mail is kept for your next send to dispatch:${dispatchId}.`
-      }),
-      payload: { dispatchId, reason }
-    },
-    (handle, type) => runtime.notifyMessageArrived(handle, type)
-  )
 }
 
 /** The Dispatch a worker_done receipt settled. */

@@ -75,6 +75,7 @@ function harness(
     getRun: () => undefined,
     getDispatchContextById: () => ({ run_id: 'run_1' }),
     getOutstandingMailboxDelivery: () => undefined,
+    getMessageSequenceWatermark: () => sequence,
     getUndeliveredUnreadMessages: (handle: string) =>
       [...mail.values()].filter(
         (row) => row.to_handle === handle && !row.read && row.delivered_at === null
@@ -285,6 +286,42 @@ const flush = async () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
 }
+
+it('finishes startup recovery without waiting for a subsequent structured mail arrival', async () => {
+  const h = harness({ busy: true })
+  const first = Promise.withResolvers<StructuredPointerSendOutcome>()
+  const later = Promise.withResolvers<StructuredPointerSendOutcome>()
+  const started = Promise.withResolvers<void>()
+  h.answers.push(
+    (id) => {
+      h.chat.set(id, { kind: 'waiting' })
+      return first.promise
+    },
+    (id) => {
+      h.chat.set(id, { kind: 'waiting' })
+      started.resolve()
+      return later.promise
+    }
+  )
+  h.receive('restored')
+  await h.deliver()
+  const recovery = h.delivery.whenIdle('dispatch:d1')
+  expect(recovery).toBeDefined()
+  h.receive('later')
+  await h.deliver()
+  try {
+    first.resolve({ kind: 'queued' })
+    await started.promise
+    const done = vi.fn()
+    void recovery?.then(done)
+    await vi.waitFor(() => expect(done).toHaveBeenCalledOnce(), { timeout: 200 })
+    expect(h.mail.get('later')?.read).toBe(0)
+  } finally {
+    first.resolve({ kind: 'queued' })
+    later.resolve({ kind: 'queued' })
+    await flush()
+  }
+})
 
 describe('structured mailbox delivery: each message whole', () => {
   it('drains ancestor custody even when the successor has no pending redrive', async () => {

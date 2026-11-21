@@ -66,8 +66,8 @@ export class OrchestrationMailboxNotificationCoordinator<
       return structuredPointerDelivery?.withdrawStale(mailboxes)
     }
     const targets = new Set(mailboxes ?? getDb()?.getStructuredMailSendMailboxes())
-    const cleanup = structuredPointerDelivery.withdrawStale(targets, true)
-    return cleanup ? this.waitForRoutingRedrives(cleanup.then(() => targets)) : undefined
+    structuredPointerDelivery.withdrawStale(targets)
+    return this.waitForRoutingRedrives(Promise.resolve(targets))
   }
 
   waitForRoutingRedrives(completion: Promise<ReadonlySet<string>>): Promise<void> {
@@ -122,7 +122,11 @@ export class OrchestrationMailboxNotificationCoordinator<
     )
   }
 
-  notifyMessageArrived(handle: string, messageType?: string): void {
+  notifyMessageArrived(
+    handle: string,
+    messageType?: string,
+    waitForRecovery = false
+  ): Promise<void> | undefined {
     const { mailboxHandle, forwarded, directTypes } = this.resolveArrivedMailboxes(handle)
     this.notifyForwarded(forwarded)
     if (!mailboxHandle) {
@@ -143,6 +147,11 @@ export class OrchestrationMailboxNotificationCoordinator<
         waiters ? [...waiters].flatMap((waiter) => waiter.typeFilter ?? []) : []
       )
       // Let a check awakened in this drain mark its rows read before the push re-reads them.
+      if (waitForRecovery) {
+        return Promise.resolve().then(() =>
+          this.deliverForHandle(mailboxHandle, reservedTypes, true)
+        )
+      }
       queueMicrotask(() => this.deps.deliverForHandle(mailboxHandle, reservedTypes))
       return
     }
