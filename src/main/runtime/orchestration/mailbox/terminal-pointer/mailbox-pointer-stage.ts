@@ -59,7 +59,7 @@ export function stageOrchestrationMailboxPointer<TWaiter extends OrchestrationMe
   ) {
     return
   }
-  const flight = args.state.beginFlight(ptyId)
+  const flight = args.state.beginFlight(ptyId, args.messages[0]?.sequence ?? args.newestSequence)
   flight.processIncarnation = expectedTarget.processIncarnation
   flight.stagedMessageIds = args.messages.map((message) => message.id)
   try {

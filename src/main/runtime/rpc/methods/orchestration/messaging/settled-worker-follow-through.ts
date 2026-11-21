@@ -243,7 +243,8 @@ export function passHeldWorkerMail(
   if (custody === 'ready') {
     // Its Task is in: a chat's moved mail follows it, each message whole.
     const mailbox = `dispatch:${followUpId}`
-    const wake = runtime.deliverPendingMessagesForHandle(mailbox, undefined, restoring)
+    const through = restoring ? db.getMessageSequenceWatermark() : undefined
+    const wake = runtime.deliverPendingMessagesForHandle(mailbox, undefined, through)
     return wake && cleanup ? Promise.all([wake, cleanup]).then(() => {}) : (wake ?? cleanup)
   }
   if (custody !== 'reported') {

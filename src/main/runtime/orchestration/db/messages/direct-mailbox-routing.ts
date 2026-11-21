@@ -60,12 +60,12 @@ export function routeDirectMessagePage(
     params.push(ORCHESTRATION_DELIVERY_BATCH_LIMIT + 1)
     const rows = this.db
       .prepare(
-        `SELECT id, type FROM messages
+        `SELECT id, type, sequence FROM messages
          WHERE run_id = ? AND to_handle = ? AND read = 0
            AND delivery_contract = 'current_delivery'${throughClause}${dispatchOwnershipClause}
          ORDER BY sequence LIMIT ?`
       )
-      .all(...params) as { id: string; type: MessageType }[]
+      .all(...params) as { id: string; type: MessageType; sequence: number }[]
     const page = rows.slice(0, ORCHESTRATION_DELIVERY_BATCH_LIMIT)
     if (page.length === 0) {
       this.db.exec('COMMIT')
@@ -92,6 +92,7 @@ export function routeDirectMessagePage(
     return {
       routedCount: Number(result.changes),
       hasMore: rows.length > ORCHESTRATION_DELIVERY_BATCH_LIMIT,
+      nextSequence: rows[ORCHESTRATION_DELIVERY_BATCH_LIMIT]?.sequence,
       types: [...new Set(page.map((row) => row.type))]
     }
   } catch (error) {

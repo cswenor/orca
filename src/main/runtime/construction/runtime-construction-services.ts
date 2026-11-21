@@ -104,7 +104,7 @@ export abstract class RuntimeConstructionServices extends RuntimeAgentStatusRead
   protected abstract readonly ptysById: ReadonlyMap<string, RuntimePtyWorktreeRecord>
   protected abstract repointPendingMessagesForHandle(
     handle: string,
-    waitForRedrive: boolean
+    through?: number
   ): Promise<void> | undefined
   protected abstract getPtyWriteHostPlatform(ptyId: string): NodeJS.Platform
   protected abstract getPtyAgent(ptyId: string): TerminalAgent | null
@@ -270,7 +270,7 @@ export abstract class RuntimeConstructionServices extends RuntimeAgentStatusRead
   abstract deliverPendingMessagesForHandle(
     handle: string,
     reservedTypes?: ReadonlySet<string>,
-    waitForRedrives?: boolean
+    recoveryThrough?: number
   ): Promise<void> | undefined
   protected abstract writeOrchestrationPointerPty(
     ptyId: string,

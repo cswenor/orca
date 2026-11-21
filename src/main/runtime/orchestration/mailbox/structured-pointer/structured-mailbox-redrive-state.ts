@@ -1,5 +1,5 @@
 export class StructuredMailboxRedriveState {
-  private readonly inFlight = new Set<string>()
+  private readonly inFlight = new Map<string, number>()
   private readonly rerun = new Map<string, Set<string>>()
   private readonly idleWaiters = new Map<string, Map<number, PromiseWithResolvers<void>>>()
 
@@ -9,7 +9,7 @@ export class StructuredMailboxRedriveState {
 
   begin(mailbox: string, reservedTypes?: ReadonlySet<string>): boolean {
     if (!this.inFlight.has(mailbox)) {
-      this.inFlight.add(mailbox)
+      this.inFlight.set(mailbox, 0)
       return true
     }
     const reserved = this.rerun.get(mailbox) ?? new Set<string>()
@@ -18,11 +18,14 @@ export class StructuredMailboxRedriveState {
     return false
   }
 
-  whenIdle(mailbox: string, watermark?: () => number | undefined): Promise<void> | undefined {
-    if (!this.inFlight.has(mailbox)) {
+  whenIdle(mailbox: string, throughSequence = Infinity): Promise<void> | undefined {
+    const offering = this.inFlight.get(mailbox)
+    if (offering === undefined) {
       return undefined
     }
-    const throughSequence = watermark?.() ?? Infinity
+    if (offering > throughSequence) {
+      return undefined
+    }
     let waiters = this.idleWaiters.get(mailbox)
     if (!waiters) {
       waiters = new Map()
@@ -37,6 +40,7 @@ export class StructuredMailboxRedriveState {
   }
 
   beforeOffering(mailbox: string, sequence: number): void {
+    this.inFlight.set(mailbox, sequence)
     const waiters = this.idleWaiters.get(mailbox)
     if (!waiters) {
       return
@@ -50,6 +54,10 @@ export class StructuredMailboxRedriveState {
     if (waiters.size === 0) {
       this.idleWaiters.delete(mailbox)
     }
+  }
+
+  endOffer(mailbox: string): void {
+    this.inFlight.set(mailbox, 0)
   }
 
   join(mailboxes: Iterable<string>): Promise<void> | undefined {

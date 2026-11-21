@@ -173,8 +173,8 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     })
   }
 
-  deliverPendingMessagesForHandle(handle: string, types?: ReadonlySet<string>, wait = false) {
-    return this.orchestrationMailboxNotifications.deliverForHandle(handle, types, wait)
+  deliverPendingMessagesForHandle(handle: string, types?: ReadonlySet<string>, through?: number) {
+    return this.orchestrationMailboxNotifications.deliverForHandle(handle, types, through)
   }
 
   /** The structured idle edge: any journal movement is a chance to redrive parked mail. */
@@ -281,8 +281,10 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
 
   protected scheduleRestoredMessageRepoints(): Promise<void> | undefined {
     let handles: Set<string>
+    let through: number
     try {
       const db = this._orchestrationDb
+      through = db?.getMessageSequenceWatermark?.() ?? 0
       // The undelivered scan omits pending pointers and mail already held by a chat.
       handles = new Set([
         ...(db?.getUndeliveredUnreadMailboxHandles?.() ?? []),
@@ -298,7 +300,7 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     const delivery = this.orchestrationMailboxNotifications
     const repoint = (handle: string) => {
       this.mailPointerRepointScheduler.schedule(handle)
-      pending.add(this.mailPointerRepointScheduler.completion(handle))
+      pending.add(this.mailPointerRepointScheduler.completion(handle, through))
     }
     for (const handle of handles) {
       try {
@@ -306,12 +308,12 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
           repoint(handle)
           continue
         }
-        const routed = owner.routeDetachedDirectMessages(handle)
+        const routed = owner.routeDetachedDirectMessages(handle, undefined, through)
         for (const mailbox of routed.mailboxes) {
           repoint(mailbox.mailboxHandle)
         }
         if (routed.completion) {
-          pending.add(delivery.waitForRoutingRedrives(routed.completion))
+          pending.add(delivery.waitForRoutingRedrives(routed.completion, through))
         }
         if (!routed.hasMore) {
           repoint(handle)
@@ -324,12 +326,9 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     return pending.size ? Promise.all(pending).then(() => undefined) : undefined
   }
 
-  protected repointPendingMessagesForHandle(
-    handle: string,
-    waitForRedrive: boolean
-  ): Promise<void> | undefined {
+  protected repointPendingMessagesForHandle(handle: string, through?: number) {
     try {
-      return this.deliverPendingMessagesForHandle(handle, undefined, waitForRedrive)
+      return this.deliverPendingMessagesForHandle(handle, undefined, through)
     } catch {
       // The unref'd repair can outlive a test/runtime-owned database during shutdown.
       return undefined

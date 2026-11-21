@@ -15,6 +15,11 @@ import {
   driveToLiveIdle,
   pointerCount,
   PANE_KEY,
+  PTY_ID,
+  registerSecondPane,
+  SECOND_PANE_KEY,
+  SECOND_PTY_ID,
+  SECOND_TERMINAL_HANDLE,
   TERMINAL_HANDLE
 } from '../../../../orchestration/mailbox/terminal-pointer/orchestration-mailbox-notification-test-harness'
 import { WRITE_ACCEPTED } from '../../../../../../shared/terminal/pty/lifecycle/pty-write-settlement'
@@ -196,7 +201,28 @@ it('waits for every PTY routing page before acknowledging direct-addressed Run m
   const selected = messages.findLast(
     (message) => db.getMessageById(message.id)?.to_handle === terminal.handle
   )!
-  const completion = owner.pendingDirectReconciliation(terminal.ptyId)
+  const completion = owner.pendingDirectReconciliation(
+    terminal.ptyId,
+    db.getMessageSequenceWatermark()
+  )
+  const liveMail = Array.from({ length: 100 }, (_, index) => {
+    const message = db.insertMessage({
+      from: 'term_sender',
+      to: mailbox,
+      runId: activeRunId,
+      subject: `Arrived after the PTY recovery started ${index}`
+    })
+    db.db.prepare('UPDATE messages SET to_handle = ? WHERE id = ?').run(terminal.handle, message.id)
+    return message
+  })
+  const pendingLiveMail = completion?.then(() =>
+    liveMail.some((message) => db.getMessageById(message.id)?.to_handle === terminal.handle)
+  )
+  const allRouting = owner.pendingDirectReconciliation(
+    terminal.ptyId,
+    db.getMessageSequenceWatermark()
+  )
+  expect(allRouting).toBeDefined()
   expect(completion).toBeDefined()
   vi.spyOn(runtime, 'waitForOrchestrationStartupMailRecovery').mockImplementation(() =>
     completion?.then(() => undefined)
@@ -212,6 +238,8 @@ it('waits for every PTY routing page before acknowledging direct-addressed Run m
     })
   ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
   expect(db.getMessageById(selected.id)).toMatchObject({ to_handle: mailbox, read: 1 })
+  await expect(pendingLiveMail).resolves.toBe(true)
+  await allRouting
   expect(db.getUnreadMessages(terminal.handle)).toEqual([])
 })
 
@@ -228,6 +256,7 @@ it.each([false, true])('settles a restored PTY pointer before ACK (chat: %s)', a
   const handback = Promise.withResolvers<typeof withdrawn>()
   const text = Promise.withResolvers<typeof WRITE_ACCEPTED>()
   const enter = Promise.withResolvers<typeof WRITE_ACCEPTED>()
+  const liveText = Promise.withResolvers<typeof WRITE_ACCEPTED>()
   try {
     const { runtime } = await createRuntime(db)
     await driveToLiveIdle(runtime)
@@ -236,7 +265,11 @@ it.each([false, true])('settles a restored PTY pointer before ACK (chat: %s)', a
       write,
       writeWithSettlement: (ptyId, data) => {
         write(ptyId, data)
-        return data === '\r' ? enter.promise : text.promise
+        return data === '\r'
+          ? enter.promise
+          : pointerCount(write) > 1
+            ? liveText.promise
+            : text.promise
       },
       kill: vi.fn(),
       probePtyLiveness: () => probe.promise,
@@ -292,6 +325,13 @@ it.each([false, true])('settles a restored PTY pointer before ACK (chat: %s)', a
     await vi.advanceTimersByTimeAsync(2_001)
     expect(pointerCount(write)).toBe(1)
     expect(db.getMessageById(selected.id)?.read).toBe(0)
+    const later = db.insertMessage({
+      from: 'term_sender',
+      to: `run:${run.id}`,
+      runId: run.id,
+      subject: 'Arrived after startup while the restored write was pending'
+    })
+    runtime.deliverPendingMessagesForHandle(`run:${run.id}`)
     db.markAsRead([alreadyRead.id])
     text.resolve(WRITE_ACCEPTED)
     await vi.advanceTimersByTimeAsync(500)
@@ -301,6 +341,12 @@ it.each([false, true])('settles a restored PTY pointer before ACK (chat: %s)', a
       pointer_enter_pending: MAILBOX_POINTER_ENTER_ATTEMPTED
     })
     enter.resolve(WRITE_ACCEPTED)
+    await vi.advanceTimersByTimeAsync(25)
+    expect(pointerCount(write)).toBe(2)
+    expect(db.getMessageById(later.id)?.read).toBe(0)
+    const stillWaiting = Symbol()
+    const observed = await Promise.race([result, Promise.resolve(stillWaiting)])
+    expect(observed).not.toBe(stillWaiting)
     await expect(result).resolves.toMatchObject({
       ok: true,
       result: { markedIds: [selected.id] }
@@ -311,6 +357,69 @@ it.each([false, true])('settles a restored PTY pointer before ACK (chat: %s)', a
     probe.resolve(true)
     text.resolve(WRITE_ACCEPTED)
     enter.resolve(WRITE_ACCEPTED)
+    liveText.resolve(WRITE_ACCEPTED)
+    vi.useRealTimers()
+    db.close()
+  }
+})
+
+it('waits for the startup pointer retry when the Run moves to a different PTY', async () => {
+  vi.useFakeTimers()
+  const db = new OrchestrationDb(':memory:')
+  const replacementText = Promise.withResolvers<typeof WRITE_ACCEPTED>()
+  try {
+    const { runtime } = await createRuntime(db)
+    await registerSecondPane(runtime)
+    await driveToLiveIdle(runtime)
+    runtime.onPtyData(SECOND_PTY_ID, '\x1b]0;Codex done\x07', 1)
+    await runtime.serializeMainTerminalBuffer(SECOND_PTY_ID)
+    const write = vi.fn((_ptyId: string, _data: string) => true)
+    runtime.setPtyController({
+      write,
+      writeWithSettlement: (ptyId, data) => {
+        write(ptyId, data)
+        return ptyId === SECOND_PTY_ID && data !== '\r' ? replacementText.promise : WRITE_ACCEPTED
+      },
+      kill: vi.fn(),
+      probePtyLiveness: async () => true,
+      getForegroundProcess: async () => null
+    })
+    const run = createBoundRun(db, 'Restored PTY changes owner')
+    const selected = db.insertMessage({
+      from: 'term_sender',
+      to: `run:${run.id}`,
+      runId: run.id,
+      subject: 'Retry on the replacement terminal'
+    })
+    runtime.setOrchestrationDb(db)
+    await vi.advanceTimersByTimeAsync(2_001)
+    expect(pointerCount(write)).toBe(1)
+    db.bindRun({
+      runId: run.id,
+      coordinatorHandle: SECOND_TERMINAL_HANDLE,
+      coordinatorPaneKey: SECOND_PANE_KEY
+    })
+    const result = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS }).dispatch({
+      id: 'rpc_restored_pointer_retry',
+      authToken: 'test',
+      method: 'orchestration.ackMessages',
+      params: { terminal: SECOND_TERMINAL_HANDLE, ackIds: [selected.id] },
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+      orchestrationRequestId: 'restored_pointer_retry'
+    })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(pointerCount(write)).toBe(2)
+    expect(write.mock.calls.map(([ptyId]) => ptyId)).toEqual([PTY_ID, SECOND_PTY_ID])
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+    replacementText.resolve(WRITE_ACCEPTED)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await expect(result).resolves.toMatchObject({
+      ok: true,
+      result: { markedIds: [selected.id] }
+    })
+    expect(write.mock.calls.at(-1)).toEqual([SECOND_PTY_ID, '\r'])
+  } finally {
+    replacementText.resolve(WRITE_ACCEPTED)
     vi.useRealTimers()
     db.close()
   }

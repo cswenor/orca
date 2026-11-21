@@ -15,6 +15,7 @@ type OrchestrationMailboxDeliveryTargetDependencies = {
 }
 
 type DeferredProbe = {
+  oldestSequence: number
   mailboxes: Set<string>
   completion?: PromiseWithResolvers<void>
 }
@@ -85,14 +86,17 @@ export class OrchestrationMailboxDeliveryTarget {
         }
   }
 
-  whenProbeIdle(ptyId: string): Promise<void> | undefined {
+  whenProbeIdle(ptyId: string, through: number): Promise<void> | undefined {
     const probe = this.probeDeferredMailboxes.get(ptyId)
-    return probe && (probe.completion ??= Promise.withResolvers<void>()).promise
+    return probe && probe.oldestSequence <= through
+      ? (probe.completion ??= Promise.withResolvers<void>()).promise
+      : undefined
   }
 
   deferForAbsenceProbe(
     ptyId: string,
     mailboxHandle: string,
+    oldestSequence: number,
     skipAbsenceProbe: boolean | undefined,
     redeliver: (mailboxHandle: string) => void
   ): boolean {
@@ -107,9 +111,11 @@ export class OrchestrationMailboxDeliveryTarget {
     const deferred = this.probeDeferredMailboxes.get(ptyId)
     if (deferred) {
       deferred.mailboxes.add(mailboxHandle)
+      deferred.oldestSequence = Math.min(deferred.oldestSequence, oldestSequence)
       return true
     }
     const probe: DeferredProbe = {
+      oldestSequence,
       mailboxes: new Set([mailboxHandle])
     }
     this.probeDeferredMailboxes.set(ptyId, probe)

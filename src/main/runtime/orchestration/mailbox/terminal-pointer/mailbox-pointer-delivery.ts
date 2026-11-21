@@ -36,8 +36,8 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
   deliverForHandle(
     handle: string,
     reservedTypes?: ReadonlySet<string>,
-    waitForRecovery = false
-  ): { routing?: Promise<ReadonlySet<string>>; flight?: Promise<void> } | undefined {
+    recoveryThrough?: number
+  ): ReturnType<typeof this.pendingPtyRecovery> {
     try {
       const terminal = this.deps.deliveryTarget.resolveTerminal(handle)
       // Skip ownership resolution, and the reconciliation it schedules, for a terminal deliver() would refuse.
@@ -48,33 +48,33 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
       if (mailboxHandle) {
         this.deliver(terminal, { mailboxHandle, reservedTypes })
       }
-      if (!waitForRecovery) {
-        return undefined
-      }
-      return this.pendingPtyRecovery(terminal.ptyId)
+      return recoveryThrough === undefined
+        ? undefined
+        : this.pendingPtyRecovery(terminal.ptyId, recoveryThrough, mailboxHandle ?? handle)
     } catch {
       // Persisted mail remains available to explicit check or the terminal's next input edge.
       return undefined
     }
   }
 
-  pendingRecovery(handle: string): ReturnType<typeof this.pendingPtyRecovery> {
+  pendingRecovery(handle: string, through: number): ReturnType<typeof this.pendingPtyRecovery> {
     const terminal = this.deps.deliveryTarget.resolveTerminal(handle)
-    return terminal ? this.pendingPtyRecovery(terminal.ptyId) : undefined
+    return terminal ? this.pendingPtyRecovery(terminal.ptyId, through, handle) : undefined
   }
 
   private pendingPtyRecovery(
-    ptyId: string
-  ): { routing?: Promise<ReadonlySet<string>>; flight?: Promise<void> } | undefined {
-    const routing = this.deps.mailboxOwner.pendingDirectReconciliation(ptyId)
-    const flight = this.whenPtyRecoveryIdle(ptyId)
-    return routing || flight ? { routing, flight } : undefined
-  }
-
-  private whenPtyRecoveryIdle(ptyId: string): Promise<void> | undefined {
-    const pending =
-      this.deps.deliveryTarget.whenProbeIdle(ptyId) ?? this.state.whenFlightSettledOrParked(ptyId)
-    return pending?.then(() => this.whenPtyRecoveryIdle(ptyId))
+    ptyId: string,
+    through: number,
+    mailbox: string
+  ):
+    | { mailbox: string; routing?: Promise<ReadonlySet<string>>; flight?: Promise<boolean> }
+    | undefined {
+    const routing = this.deps.mailboxOwner.pendingDirectReconciliation(ptyId, through)
+    const probe = this.deps.deliveryTarget.whenProbeIdle(ptyId, through)
+    const flight = probe
+      ? probe.then(() => true)
+      : this.state.whenFlightSettledOrParked(ptyId, through)
+    return routing || flight ? { mailbox, routing, flight } : undefined
   }
 
   deliver(
@@ -153,6 +153,7 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
       this.deps.deliveryTarget.deferForAbsenceProbe(
         ptyId,
         mailboxHandle,
+        unread[0]?.sequence ?? newestSequence,
         options.skipAbsenceProbe,
         (probedMailbox) => this.redeliverAfterProbe(ptyId, probedMailbox)
       )

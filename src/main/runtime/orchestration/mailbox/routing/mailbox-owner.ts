@@ -34,6 +34,7 @@ export type RoutedOrchestrationMailbox = {
 export type DetachedMailboxRoutingPage = {
   mailboxes: RoutedOrchestrationMailbox[]
   hasMore: boolean
+  nextSequence?: number
   completion?: Promise<ReadonlySet<string>>
 }
 
@@ -49,10 +50,9 @@ export class OrchestrationMailboxOwner {
   private readonly directReconciliation = new MailboxPtyReconciliation((ptyId, notified) =>
     this.reconcileDirectPage(ptyId, notified)
   )
-  private readonly pendingDetachedDirectReconciliations = new Map<
-    string,
-    Promise<ReadonlySet<string>>
-  >()
+  private readonly detachedDirectReconciliation = new MailboxPtyReconciliation(
+    (handle, notified, paneKey) => this.reconcileDetachedDirectPage(handle, notified, paneKey)
+  )
 
   constructor(private readonly deps: OrchestrationMailboxOwnerDependencies) {}
 
@@ -149,19 +149,29 @@ export class OrchestrationMailboxOwner {
     const pages = terminal.paneKeys.map((paneKey) =>
       db.routeForeignDirectMessagesToOwnedMailboxes?.(terminal.handle, ownerRunId, paneKey)
     )
-    if (pages.some((routed) => routed?.hasMore)) {
-      this.directReconciliation.schedule(terminal.ptyId)
+    for (const page of pages) {
+      if (page?.hasMore) {
+        this.directReconciliation.schedule(terminal.ptyId, page.nextSequence)
+      }
     }
     return pages.flatMap((routed) => routed?.mailboxes ?? [])
   }
 
-  routeDetachedDirectMessages(directHandle: string, paneKey?: string): DetachedMailboxRoutingPage {
+  routeDetachedDirectMessages(
+    directHandle: string,
+    paneKey?: string,
+    recoveryThrough?: number
+  ): DetachedMailboxRoutingPage {
     const routed = this.routeDetachedDirectPage(directHandle, paneKey)
-    routed.completion =
-      this.pendingDetachedDirectReconciliations.get(directHandle) ??
-      (routed.hasMore
-        ? this.scheduleDetachedDirectReconciliation(directHandle, paneKey)
-        : undefined)
+    if (routed.hasMore) {
+      this.detachedDirectReconciliation.schedule(directHandle, routed.nextSequence, paneKey)
+    }
+    if (recoveryThrough !== undefined) {
+      routed.completion = this.detachedDirectReconciliation.completion(
+        directHandle,
+        recoveryThrough
+      )
+    }
     return routed
   }
 
@@ -184,8 +194,11 @@ export class OrchestrationMailboxOwner {
     }
   }
 
-  pendingDirectReconciliation(ptyId: string): Promise<ReadonlySet<string>> | undefined {
-    return this.directReconciliation.completion(ptyId)
+  pendingDirectReconciliation(
+    ptyId: string,
+    through: number
+  ): Promise<ReadonlySet<string>> | undefined {
+    return this.directReconciliation.completion(ptyId, through)
   }
 
   private routeDetachedDirectPage(
@@ -195,7 +208,11 @@ export class OrchestrationMailboxOwner {
     const routed = this.deps
       .getDb()
       ?.routeForeignDirectMessagesToOwnedMailboxes?.(directHandle, undefined, paneKey)
-    return { mailboxes: routed?.mailboxes ?? [], hasMore: routed?.hasMore ?? false }
+    return {
+      mailboxes: routed?.mailboxes ?? [],
+      hasMore: routed?.hasMore ?? false,
+      nextSequence: routed?.nextSequence
+    }
   }
 
   private resolveRunMailbox(
@@ -226,7 +243,7 @@ export class OrchestrationMailboxOwner {
       this.deps.onRoutedMessageTypes(runMailbox, routed?.types ?? [])
       this.directReconciliation.record(terminal.ptyId, runMailbox)
       if (routed?.hasMore) {
-        this.directReconciliation.schedule(terminal.ptyId)
+        this.directReconciliation.schedule(terminal.ptyId, routed.nextSequence)
       }
     }
     return runMailbox
@@ -265,7 +282,7 @@ export class OrchestrationMailboxOwner {
       this.deps.onRoutedMessageTypes(dispatchMailbox, routed?.types ?? [])
       this.directReconciliation.record(terminal.ptyId, dispatchMailbox)
       if (routed?.hasMore) {
-        this.directReconciliation.schedule(terminal.ptyId)
+        this.directReconciliation.schedule(terminal.ptyId, routed.nextSequence)
       }
     }
     return dispatchMailbox
@@ -285,38 +302,24 @@ export class OrchestrationMailboxOwner {
     this.resolve(current)
   }
 
-  private scheduleDetachedDirectReconciliation(
+  private reconcileDetachedDirectPage(
     directHandle: string,
+    notified: Set<string>,
     paneKey?: string
-  ): Promise<ReadonlySet<string>> {
-    const { promise, resolve } = Promise.withResolvers<ReadonlySet<string>>()
-    const notified = new Set<string>()
-    const advance = () => {
-      try {
-        const routed = this.routeDetachedDirectPage(directHandle, paneKey)
-        for (const mailbox of routed.mailboxes) {
-          notified.add(mailbox.mailboxHandle)
-          for (const type of mailbox.types) {
-            this.deps.onForeignMailboxRouted(mailbox.mailboxHandle, type)
-          }
-        }
-        if (routed.hasMore) {
-          setImmediate(advance)
-          return
-        }
-        for (const type of this.deps.getDb()?.getUnreadDirectMessageTypes(directHandle) ?? []) {
-          notified.add(directHandle)
-          this.deps.onForeignMailboxRouted(directHandle, type)
-        }
-      } catch (error) {
-        console.warn(`[orchestration] failed to continue routing mailbox ${directHandle}`, error)
+  ): void {
+    const routed = this.routeDetachedDirectMessages(directHandle, paneKey)
+    for (const mailbox of routed.mailboxes) {
+      notified.add(mailbox.mailboxHandle)
+      for (const type of mailbox.types) {
+        this.deps.onForeignMailboxRouted(mailbox.mailboxHandle, type)
       }
-      this.pendingDetachedDirectReconciliations.delete(directHandle)
-      resolve(notified)
     }
-    this.pendingDetachedDirectReconciliations.set(directHandle, promise)
-    setImmediate(advance)
-    return promise
+    if (!routed.hasMore) {
+      for (const type of this.deps.getDb()?.getUnreadDirectMessageTypes(directHandle) ?? []) {
+        notified.add(directHandle)
+        this.deps.onForeignMailboxRouted(directHandle, type)
+      }
+    }
   }
 }
 

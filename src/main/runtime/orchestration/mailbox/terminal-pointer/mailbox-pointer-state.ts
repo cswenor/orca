@@ -4,7 +4,8 @@ export type OrchestrationMailboxDeliveryFlight = {
   submitEnter: (() => void) | null
   deferredUntilIdle: boolean
   idleObservedWhileDeferred: boolean
-  startupCompletion?: PromiseWithResolvers<void>
+  oldestSequence: number
+  startupCompletion?: PromiseWithResolvers<boolean>
   /** The incarnation that staged this flight, so retirement can name the rows it owns. */
   processIncarnation?: string
 }
@@ -27,16 +28,21 @@ export class OrchestrationMailboxPointerState {
   }
 
   /** A parked pointer waits for a future input edge, not the current startup pass. */
-  whenFlightSettledOrParked(ptyId: string): Promise<void> | undefined {
+  whenFlightSettledOrParked(ptyId: string, through: number): Promise<boolean> | undefined {
     const flight = this.flightsByPtyId.get(ptyId)
-    if (!flight || (flight.deferredUntilIdle && flight.submitEnter)) {
+    if (
+      !flight ||
+      flight.oldestSequence > through ||
+      (flight.deferredUntilIdle && flight.submitEnter)
+    ) {
       return undefined
     }
-    return (flight.startupCompletion ??= Promise.withResolvers<void>()).promise
+    return (flight.startupCompletion ??= Promise.withResolvers<boolean>()).promise
   }
 
-  beginFlight(ptyId: string): OrchestrationMailboxDeliveryFlight {
+  beginFlight(ptyId: string, oldestSequence = 0): OrchestrationMailboxDeliveryFlight {
     const flight = {
+      oldestSequence,
       enterTimer: null,
       stagedMessageIds: [],
       submitEnter: null,
@@ -68,12 +74,12 @@ export class OrchestrationMailboxPointerState {
   finishStartupWaitIfParked(ptyId: string): void {
     const flight = this.flightsByPtyId.get(ptyId)
     if (flight?.deferredUntilIdle && flight.submitEnter) {
-      this.finishStartupWait(flight)
+      this.finishStartupWait(flight, false)
     }
   }
 
-  finishStartupWait(flight: OrchestrationMailboxDeliveryFlight): void {
-    flight.startupCompletion?.resolve()
+  finishStartupWait(flight: OrchestrationMailboxDeliveryFlight, settled = true): void {
+    flight.startupCompletion?.resolve(settled)
     flight.startupCompletion = undefined
   }
 

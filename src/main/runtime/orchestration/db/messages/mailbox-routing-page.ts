@@ -5,6 +5,7 @@ export const ORCHESTRATION_DELIVERY_BATCH_LIMIT = 50
 export type MailboxRoutingPage = {
   routedCount: number
   hasMore: boolean
+  nextSequence?: number
   types: MessageType[]
 }
 

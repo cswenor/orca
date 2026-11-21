@@ -74,8 +74,8 @@ export class OrchestrationStructuredMailboxPointerDelivery<
   }
 
   /** Observe recovery without attaching later arrivals to that startup wait. */
-  whenIdle(mailbox: string): Promise<void> | undefined {
-    return this.redrives.whenIdle(mailbox, () => this.deps.getDb()?.getMessageSequenceWatermark())
+  whenIdle(mailbox: string, through = this.deps.getDb()?.getMessageSequenceWatermark()) {
+    return this.redrives.whenIdle(mailbox, through)
   }
 
   /** Retry mail parked on this session's settlement or reattach journal edge. */
@@ -89,8 +89,11 @@ export class OrchestrationStructuredMailboxPointerDelivery<
 
   /** Whether a status callback is news to this session's mail; see StructuredMailSettledState. */
   statusChanged(sessionId: string, status: string | null): boolean {
-    const fence = this.deps.host.currentFence(sessionId)
-    return this.settledState.statusChanged(sessionId, status, fence)
+    return this.settledState.statusChanged(
+      sessionId,
+      status,
+      this.deps.host.currentFence(sessionId)
+    )
   }
 
   /** Prune only this recorded session; settlement removes resolver identity and transient nulls also affect siblings. */
@@ -163,6 +166,7 @@ export class OrchestrationStructuredMailboxPointerDelivery<
     // Each message is offered to each owner once per pass; one it no longer owes waits for an edge.
     const offered = new Set<string>()
     for (;;) {
+      this.redrives.endOffer(mailboxHandle)
       const db = this.deps.getDb()
       if (!db) {
         return

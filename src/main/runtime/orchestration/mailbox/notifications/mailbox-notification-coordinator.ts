@@ -36,25 +36,16 @@ export class OrchestrationMailboxNotificationCoordinator<
   deliverForHandle(
     handle: string,
     reservedTypes?: ReadonlySet<string>,
-    waitForRedrives = false
+    through?: number
   ): Promise<void> | undefined {
     const { pointerDelivery, structuredPointerDelivery } = this.deps
     const terminal = structuredPointerDelivery?.deliverForHandle(handle, reservedTypes)
       ? undefined
-      : pointerDelivery.deliverForHandle(handle, reservedTypes, waitForRedrives)
-    if (!waitForRedrives) {
+      : pointerDelivery.deliverForHandle(handle, reservedTypes, through)
+    if (through === undefined) {
       return undefined
     }
-    const direct = this.waitForTerminalRecovery(terminal)
-    const structured = structuredPointerDelivery?.whenIdle(handle)
-    // A structured pass can give mail back to a PTY. Its redrive starts before the
-    // structured completion resolves, but the PTY flight won't exist when we start.
-    const handback = structured?.then(() =>
-      this.waitForTerminalRecovery(pointerDelivery.pendingRecovery(handle))
-    )
-    return direct && handback
-      ? Promise.all([direct, handback]).then(() => undefined)
-      : (direct ?? handback)
+    return this.waitForRecovery(terminal?.mailbox ?? handle, through, terminal)
   }
 
   withdrawStaleChatMail(
@@ -70,26 +61,45 @@ export class OrchestrationMailboxNotificationCoordinator<
     return this.waitForRoutingRedrives(Promise.resolve(targets))
   }
 
-  waitForRoutingRedrives(completion: Promise<ReadonlySet<string>>): Promise<void> {
+  waitForRoutingRedrives(
+    completion: Promise<ReadonlySet<string>>,
+    through = this.deps.getDb()?.getMessageSequenceWatermark?.() ?? 0
+  ): Promise<void> {
     return this.deps.mailboxOwner.waitForRoutingRedrives(completion, {
-      whenIdle: (handle) => {
-        const { pointerDelivery, structuredPointerDelivery } = this.deps
-        const structured = structuredPointerDelivery?.whenIdle(handle)
-        const terminal = () => this.waitForTerminalRecovery(pointerDelivery.pendingRecovery(handle))
-        return structured ? structured.then(terminal) : terminal()
-      }
+      whenIdle: (handle) => this.waitForRecovery(handle, through)
     })
   }
 
-  private waitForTerminalRecovery(
-    pending?: ReturnType<typeof this.deps.pointerDelivery.pendingRecovery>
+  private waitForRecovery(
+    handle: string,
+    through: number,
+    pending = this.deps.pointerDelivery.pendingRecovery(handle, through),
+    previousRouting?: Promise<ReadonlySet<string>>
   ): Promise<void> | undefined {
     const { routing, flight } = pending ?? {}
-    if (!routing) {
-      return flight
-    }
-    const routed = this.waitForRoutingRedrives(routing)
-    return flight ? Promise.all([routed, flight]).then(() => undefined) : routed
+    const routed =
+      routing && routing !== previousRouting
+        ? this.waitForRoutingRedrives(routing, through)
+        : undefined
+    const structured = this.deps.structuredPointerDelivery?.whenIdle(handle, through)
+    const settling = structured ? Promise.all([flight, structured]).then(() => true) : flight
+    // The ordinary settlement stack can queue a redrive to a different owner after resolving
+    // its flight. Observe it after that microtask has had a chance to admit its delivery.
+    const successor = settling?.then(async (settled) => {
+      if (!settled) {
+        return
+      }
+      await Promise.resolve()
+      return this.waitForRecovery(
+        handle,
+        through,
+        this.deps.pointerDelivery.pendingRecovery(handle, through),
+        routing
+      )
+    })
+    return routed && successor
+      ? Promise.all([routed, successor]).then(() => undefined)
+      : (routed ?? successor)
   }
 
   deliverForTerminal(terminal: OrchestrationMailboxTerminal): void {
@@ -148,8 +158,9 @@ export class OrchestrationMailboxNotificationCoordinator<
       )
       // Let a check awakened in this drain mark its rows read before the push re-reads them.
       if (waitForRecovery) {
+        const through = this.deps.getDb()?.getMessageSequenceWatermark?.() ?? 0
         return Promise.resolve().then(() =>
-          this.deliverForHandle(mailboxHandle, reservedTypes, true)
+          this.deliverForHandle(mailboxHandle, reservedTypes, through)
         )
       }
       queueMicrotask(() => this.deps.deliverForHandle(mailboxHandle, reservedTypes))

@@ -115,13 +115,14 @@ export function routeForeignDirectMessagesToOwnedMailboxes(
     )
     const rows = this.db
       .prepare(
-        `SELECT id, run_id, type FROM (${limitedBranches.join(' UNION ')})
+        `SELECT id, run_id, type, sequence FROM (${limitedBranches.join(' UNION ')})
          ORDER BY sequence LIMIT ?`
       )
       .all(...branchParams.flat(), ORCHESTRATION_DELIVERY_BATCH_LIMIT + 1) as {
       id: string
       run_id: string
       type: MessageType
+      sequence: number
     }[]
     const page = rows.slice(0, ORCHESTRATION_DELIVERY_BATCH_LIMIT)
     if (page.length === 0) {
@@ -162,6 +163,7 @@ export function routeForeignDirectMessagesToOwnedMailboxes(
     return {
       routedCount: page.length,
       hasMore: rows.length > ORCHESTRATION_DELIVERY_BATCH_LIMIT,
+      nextSequence: rows[ORCHESTRATION_DELIVERY_BATCH_LIMIT]?.sequence,
       types: [...new Set(page.map((row) => row.type))],
       mailboxes: [...byMailbox].map(([mailboxHandle, types]) => ({
         mailboxHandle,
