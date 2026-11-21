@@ -638,6 +638,7 @@ it('enforces ordinary residual precedence while selecting only eligible messages
   expect(
     await harness.call('orchestration.check', { terminal: 'term_lead', peek: true }, ctx)
   ).toMatchObject({ messages: [{ id: 'msg_prebind' }] })
+  db.db.prepare('UPDATE messages SET to_handle = ? WHERE id = ?').run('term_lead', 'msg_prebind')
   db.insertMessage({
     id: 'msg_child_status',
     from: 'term_child',

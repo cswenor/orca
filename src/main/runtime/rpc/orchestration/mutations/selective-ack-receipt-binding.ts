@@ -13,6 +13,7 @@ import { OrchestrationError } from '../../../orchestration/orchestration-error'
 import type { RpcRequest } from '../../core'
 import { callerHoldsResidualDispatch } from '../../methods/orchestration/messaging/check-run-pending-mail'
 import { resolveCheckDispatch } from '../../methods/orchestration/messaging/dispatch-mailbox-fence'
+import { isSelectedDispatchMessage } from '../../methods/orchestration/messaging/selective-message-ack'
 import {
   assertDirectMailboxConsumer,
   resolveMailboxCheckScope
@@ -222,9 +223,14 @@ function selectiveAckReceiptBinding(
       scope.caller.orcaSessionId
     )
   ) {
-    const mailbox = `dispatch:${dispatch.id}`
+    const scope = {
+      mailbox: `dispatch:${dispatch.id}`,
+      runId: dispatch.run_id,
+      caller: handle,
+      assignee: dispatch.assignee_handle
+    }
     for (const row of getMessagesByIds(db, ackIds).values()) {
-      if (row.to_handle === mailbox) {
+      if (isSelectedDispatchMessage(row, scope)) {
         residual = [dispatch.id, dispatch.consumer_generation]
         break
       }

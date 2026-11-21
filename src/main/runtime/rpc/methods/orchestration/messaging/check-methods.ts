@@ -80,15 +80,16 @@ export function resolveMailboxCheckScope(
   if (activeDispatch && !callerHoldsDispatchPane(activeDispatch, paneKey)) {
     throw dispatchFenced()
   }
-  if (params.ackIds && activeDispatch?.contract_version === LEGACY_CONTRACT_VERSION) {
+  const remoteAttachment =
+    !activeDispatch && paneKey ? db.findActiveRemoteAttachmentForPane(paneKey) : undefined
+  const legacyMailbox = activeDispatch?.contract_version === LEGACY_CONTRACT_VERSION
+  if (params.ackIds && (legacyMailbox || (remoteAttachment && !unboundOnly))) {
     throw new OrchestrationError(
       'legacy_read_only',
       'Legacy mailboxes do not support selective acknowledgment.',
       { effectsApplied: false }
     )
   }
-  const remoteAttachment =
-    !activeDispatch && paneKey ? db.findActiveRemoteAttachmentForPane(paneKey) : undefined
   if (
     remoteAttachment &&
     !db.isRemoteAttachmentProcessCurrent({

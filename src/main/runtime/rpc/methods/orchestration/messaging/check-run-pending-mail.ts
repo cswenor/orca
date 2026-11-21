@@ -111,6 +111,8 @@ export async function checkRunPendingMail(args: {
             ? {
                 mailbox: `dispatch:${residual.id}`,
                 runId: residual.run_id,
+                caller: handle,
+                assignee: residual.assignee_handle,
                 revalidate: () => {
                   const current = resolveCheckDispatch(db, handle, paneKey, true, true)
                   if (

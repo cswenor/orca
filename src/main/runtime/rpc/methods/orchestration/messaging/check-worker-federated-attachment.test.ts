@@ -119,6 +119,18 @@ describe('orchestration.check on a federated attachment across a restart', () =>
       })
     })
 
+    const selective = eraseRpcMethods(ORCHESTRATION_METHODS).find(
+      (entry) => entry.name === 'orchestration.ackMessages'
+    )
+    if (!selective || isStreamingMethod(selective)) {
+      throw new Error('orchestration.ackMessages is not registered')
+    }
+    await expect(
+      selective.handler(
+        selective.params?.parse({ terminal: WORKER_HANDLE, ackIds: ['msg_federated_1'] }),
+        first
+      )
+    ).rejects.toMatchObject({ code: 'legacy_read_only', data: { effectsApplied: false } })
     const delivered = await check(first)
     expect(delivered.messages.map((message) => message.id)).toEqual(['msg_federated_1'])
     expect(delivered.runId).toBe('run_coordinator')

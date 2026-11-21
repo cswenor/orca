@@ -6,6 +6,19 @@ import {
 } from '../../../../orchestration/db/runs/run-coordinator-mail-routing'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
 import { ORCHESTRATION_LEGACY_RUN_ID } from '../../../../../../shared/orchestration/orchestration-rpc-contract'
+import type { MessageRow } from '../../../../orchestration/db/orchestration-records'
+
+export function isSelectedDispatchMessage(
+  message: MessageRow,
+  dispatch: { mailbox: string; runId: string; caller: string; assignee: string | null }
+): boolean {
+  return (
+    message.run_id === dispatch.runId &&
+    (message.to_handle === dispatch.mailbox ||
+      message.to_handle === dispatch.caller ||
+      message.to_handle === dispatch.assignee)
+  )
+}
 
 export function acknowledgeSelectedMessages(args: {
   db: OrchestrationDb
@@ -20,7 +33,7 @@ export function acknowledgeSelectedMessages(args: {
     assignee: string | null
     excludeDispatchOwned?: boolean
   }
-  residual?: { mailbox: string; runId: string; revalidate: () => void }
+  residual?: Parameters<typeof isSelectedDispatchMessage>[1] & { revalidate: () => void }
 }) {
   const { db, mailbox, residual } = args
   const { routeSource } = args
@@ -41,23 +54,25 @@ export function acknowledgeSelectedMessages(args: {
     : undefined
   const validateSelection = () => {
     const rows = getMessagesByIds(db, ids)
+    let needsResidualRevalidation = false
     const messages = ids.map((id) => {
       const message = rows.get(id)
-      const runId =
-        residual && message?.to_handle === residual.mailbox
-          ? residual.runId
-          : (args.mailboxIdentity?.runId ?? args.runId)
+      const residualMatch = Boolean(
+        message && residual && isSelectedDispatchMessage(message, residual)
+      )
+      needsResidualRevalidation ||= residualMatch
+      const runId = args.mailboxIdentity?.runId ?? args.runId
       if (
         !message ||
-        (message.to_handle !== mailbox &&
-          message.to_handle !== residual?.mailbox &&
-          !(
-            routeSource &&
-            (message.to_handle === routeSource.caller ||
-              message.to_handle === routeSource.assignee) &&
-            !ownedByDispatch?.get(message.id)
-          )) ||
-        (runId !== undefined && message.run_id !== runId)
+        (!residualMatch &&
+          ((message.to_handle !== mailbox &&
+            !(
+              routeSource &&
+              (message.to_handle === routeSource.caller ||
+                message.to_handle === routeSource.assignee) &&
+              !ownedByDispatch?.get(message.id)
+            )) ||
+            (runId !== undefined && message.run_id !== runId)))
       ) {
         throw new OrchestrationError(
           'invalid_argument',
@@ -91,8 +106,8 @@ export function acknowledgeSelectedMessages(args: {
         { effectsApplied: false }
       )
     }
-    if (residual && messages.some((message) => message.to_handle === residual.mailbox)) {
-      residual.revalidate()
+    if (needsResidualRevalidation) {
+      residual?.revalidate()
     }
     return messages
   }
