@@ -89,7 +89,7 @@ describe('OrcaRuntimeService', () => {
           paired: false,
           evidence: undefined
         })
-      ).toThrow('cannot verify this restored pane')
+      ).toThrow('cannot verify this pane')
     }
     expect(runtime.verifyOrchestrationCompatibilityCaller(evidence)).not.toBeNull()
     expect((await runtime.listTerminals()).terminals).toEqual([
@@ -100,6 +100,12 @@ describe('OrcaRuntimeService', () => {
 
     expect(retireAuthority).toHaveBeenCalledWith(spawnEnv.ORCA_PANE_KEY, { confirmedExit: true })
     expect(runtime.verifyOrchestrationCompatibilityCaller(evidence)).toBeNull()
+    expect(() =>
+      assertSelectiveAckCaller(undefined, runtime, terminal.handle, 'pty-authority:process-1', {
+        paired: false,
+        evidence: undefined
+      })
+    ).toThrow('cannot verify this pane')
     expect((await runtime.listTerminals()).terminals).toEqual([
       expect.not.objectContaining({ agentIdentity: expect.anything() })
     ])
@@ -179,8 +185,9 @@ describe('OrcaRuntimeService', () => {
           paired: false,
           evidence: undefined
         })
+      runtime.onPtyData(ptyId, '\x1b]133;D;0\x07', 100)
       if (tokenized) {
-        expect(ack).toThrow('cannot verify this restored pane')
+        expect(ack).toThrow('cannot verify this pane')
       } else {
         expect(ack()).toHaveProperty('pty.id', ptyId)
       }
@@ -298,7 +305,7 @@ describe('OrcaRuntimeService', () => {
       await vi.waitFor(() => expect(ack(token)).toHaveProperty('pty.id', 'persisted-pty'))
       expect(() => ack(RESTORED_AUTHORITY_TOKEN)).toThrow('current agent pane launch token')
     } else {
-      expect(() => ack()).toThrow('cannot verify this restored pane')
+      expect(() => ack()).toThrow('cannot verify this pane')
       expect(ack(RESTORED_AUTHORITY_TOKEN)).toMatchObject({
         pty: { id: 'persisted-pty', launchTokenHash: RESTORED_AUTHORITY_TOKEN_HASH }
       })

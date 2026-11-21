@@ -3,6 +3,7 @@ import {
   createRootDispatch,
   reattachDispatchConsumer
 } from '../../../../orchestration/db/root-dispatch-test-fixture'
+import { MUTATION_RECEIPT_MAX_ROWS } from '../../../../orchestration/db/mutation-receipts/mutation-receipt-capacity'
 import { createOrchestrationRpcHarness } from '../rpc-test-harness'
 import { RpcDispatcher } from '../../../dispatcher'
 import { ORCHESTRATION_METHODS } from '../orchestration'
@@ -349,6 +350,7 @@ it('only writes read state and a receipt, including on dispatcher replay', async
   }
   expect(db.getMessageById(selected.id)).toEqual({ ...original, read: 1 })
   expect(db.getMutationReceipt(fingerprint, ack.orchestrationRequestId)?.state).toBe('completed')
+  expect(db.getMutationReceipt(fingerprint, 'expired-request')).toEqual(expired)
   expect(refreshSenders).not.toHaveBeenCalled()
   expect(recordInteraction).not.toHaveBeenCalled()
   await expect(
@@ -372,6 +374,59 @@ it('only writes read state and a receipt, including on dispatcher replay', async
     result: { state: 'completed', method: 'orchestration.ackMessages' }
   })
   expect(status).not.toHaveProperty('result.receipt')
+})
+
+it('refuses a new selection at capacity without pruning and replays the original receipt', async () => {
+  const { db, runtime } = harness.setup(false)
+  const selected = db.insertMessage({ from: 'sender', to: 'term_coord', subject: 'mark once' })
+  const unread = db.insertMessage({ from: 'sender', to: 'term_coord', subject: 'leave unread' })
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+  const request = {
+    id: 'rpc_full_ledger',
+    authToken: 'test',
+    method: 'orchestration.ackMessages',
+    params: { terminal: 'term_coord', ackIds: [selected.id] },
+    orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+    orchestrationRequestId: 'original-selection'
+  }
+  await expect(dispatcher.dispatch(request)).resolves.toMatchObject({
+    ok: true,
+    result: { markedIds: [selected.id], mutation: { replayed: false } }
+  })
+  db.db
+    .prepare(
+      `WITH RECURSIVE receipt_numbers(value) AS (
+         VALUES (1)
+         UNION ALL
+         SELECT value + 1 FROM receipt_numbers WHERE value < ?
+       )
+       INSERT INTO mutation_receipts
+         (caller_fingerprint, request_id, method, payload_hash, state, receipt, updated_at)
+       SELECT 'other-caller', printf('request-%d', value), 'orchestration.send',
+              'hash', 'completed', '{}', '2000-01-01'
+       FROM receipt_numbers`
+    )
+    .run(MUTATION_RECEIPT_MAX_ROWS - 1)
+
+  await expect(
+    dispatcher.dispatch({
+      ...request,
+      params: { ...request.params, ackIds: [unread.id] },
+      orchestrationRequestId: 'refused-selection'
+    })
+  ).resolves.toMatchObject({ ok: false, error: { code: 'mutation_ledger_full' } })
+  await expect(dispatcher.dispatch(request)).resolves.toMatchObject({
+    ok: true,
+    result: { markedIds: [selected.id], mutation: { replayed: true } }
+  })
+  expect(db.getMessageById(unread.id)?.read).toBe(0)
+  expect(
+    db.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM mutation_receipts WHERE caller_fingerprint = 'other-caller'"
+      )
+      .get()
+  ).toEqual({ count: MUTATION_RECEIPT_MAX_ROWS - 1 })
 })
 
 it('requires current launch proof for local selective calls to a token-launched pane', async () => {
@@ -429,7 +484,7 @@ it('requires current launch proof for local selective calls to a token-launched 
     ok: false,
     error: {
       code: 'consumer_fenced',
-      message: expect.stringContaining('cannot verify this restored pane'),
+      message: expect.stringContaining('cannot verify this pane'),
       data: { effectsApplied: false }
     }
   })

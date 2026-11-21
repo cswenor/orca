@@ -77,3 +77,12 @@ export function ensureMutationReceiptCapacity(db: Database.Database): void {
     )
   }
 }
+
+export function assertSelectiveReceiptCapacity(db: Database.Database): void {
+  if (receiptCount(db) >= MUTATION_RECEIPT_MAX_ROWS) {
+    throw new OrchestrationError(
+      'mutation_ledger_full',
+      'The durable mutation ledger is full. Selective acknowledgment never prunes receipts.'
+    )
+  }
+}

@@ -103,7 +103,7 @@ export const ORCHESTRATION_COMMAND_SPECS: CommandSpec[] = [
     usage:
       'orca orchestration check [--terminal <handle>] [--run <run_id>] [--ack <delivery_id> | --ack-ids <msg_id,...>] [--unread | --peek | --all] [--types <type,...>] [--format] [--wait] [--timeout-ms <n>] [--retry-request <id>] [--json]\n' +
       "  default: return the bound Run's oldest unread FIFO batch and mark it handled.\n" +
-      '  --ack: optional; acknowledges a batch from an older Orca that does not mark it.\n  --ack-ids: mark only the listed messages read; never take another batch. On the execution host, a token-launched agent must run it from its own live pane. If Orca cannot verify a restored pane, use an ordinary check or open a new pane.\n' +
+      '  --ack: optional; acknowledges a batch from an older Orca that does not mark it.\n  --ack-ids: mark only the listed messages read; never take another batch. On the execution host, a token-launched agent must run it from its own live pane. If Orca cannot verify a pane, use an ordinary check or open a new pane.\n             mutation_ledger_full means no messages were marked; ordinary mutation maintenance can free receipt space.\n' +
       '  --peek: return only unread messages without marking them read.\n  --all: return recent messages for the handle; does not mark read.\n' +
       '  --wait: block until a matching message arrives or --timeout-ms expires.\n' +
       '          Emits JSON keepalive lines to stderr every 15s so the caller can\n' +

@@ -86,7 +86,7 @@ function terminalEvidenceMismatch(launchKind: 'gone' | 'held' | 'unknown'): Orch
   return new OrchestrationError(
     'consumer_fenced',
     launchKind === 'unknown'
-      ? 'Selective acknowledgment cannot verify this restored pane. Use an ordinary check or open a new pane.'
+      ? 'Selective acknowledgment cannot verify this pane. Use an ordinary check or open a new pane.'
       : launchKind === 'held'
         ? 'Selective acknowledgment requires the current agent pane launch token. Run it from that pane or use an ordinary check.'
         : 'Terminal evidence is stale or does not match this mailbox caller.',

@@ -86,7 +86,17 @@ export function retireLaunch(
   pty: PtyLaunchFacts,
   incarnationId: PtyIncarnationId | null = pty.incarnationId
 ): void {
-  pty.launchEvidence = { kind: 'gone', incarnationId, callerToken: null }
+  const previous = pty.launchEvidence
+  // Terminal output can retire a recipe, but cannot prove the process was launched without a token.
+  const confirmedTokenless =
+    previous?.kind === 'gone' &&
+    previous.incarnationId === incarnationId &&
+    previous.callerToken === null
+  pty.launchEvidence = {
+    kind: 'gone',
+    incarnationId,
+    callerToken: confirmedTokenless ? null : undefined
+  }
   pty.launchConfig = null
 }
 
