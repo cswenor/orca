@@ -12,6 +12,7 @@ import {
 import { computerUseErrorRecoveryData } from '../../../../shared/computer/computer-use-error-recovery'
 import { errorResponse, mapEmulatorError, mapRuntimeError } from './rpc-response'
 import { PluginHookDeniedError } from '../../../plugins/hooks/plugin-hook-dispatch'
+import { OrchestrationError } from '../../orchestration/orchestration-error'
 
 export function invalidArgumentResponse(
   request: RpcRequest,
@@ -54,6 +55,13 @@ export function mapDispatcherError(
   }
   if (request.method.startsWith('emulator.')) {
     return mapEmulatorError(request.id, meta, error)
+  }
+  if (
+    request.method === 'orchestration.ackMessages' &&
+    error instanceof OrchestrationError &&
+    (error.code === 'request_aborted' || error.code === 'runtime_unavailable')
+  ) {
+    return errorResponse(request.id, meta, error.code, error.message, error.data)
   }
   return mapRuntimeError(request.id, meta, error)
 }
