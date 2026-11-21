@@ -14,13 +14,14 @@ import { OrcaRuntimeWithAutomationApiOperations } from '../../workspaces/persist
 export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWithAutomationApiOperations {
   private orchestrationDbMaintenance: OrchestrationDbMaintenance | undefined
   private finishRestoredWorkerMail: (() => Promise<void>) | undefined
+  private restoredMailboxRouting: Promise<void> | undefined
 
   abstract ensureOrchestrationFederationRelay(
     runId?: string,
     options?: { keepAwake?: boolean }
   ): void
 
-  protected abstract scheduleRestoredMessageRepoints(): void
+  protected abstract scheduleRestoredMessageRepoints(): Promise<void> | undefined
 
   abstract hasLiveTerminalForPaneKey(
     paneKey: string,
@@ -48,7 +49,7 @@ export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWith
       this.bindMailHandBack(this._orchestrationDb)
       this.bindCrewChanges(this._orchestrationDb)
       this.ensureOrchestrationFederationRelay()
-      this.scheduleRestoredMessageRepoints()
+      this.trackRestoredMailboxRouting()
       this.bindWorkerTerminalAutoRelease(this._orchestrationDb)
       // Recover deadlines armed before a restart.
       getWorkerTerminalAutoReleaseScheduler(this).rearm()
@@ -59,12 +60,27 @@ export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWith
     return this._orchestrationDb
   }
 
-  /** Finish the already-scheduled cold-open pass before any mark-only mailbox snapshot. */
+  /** Finish already-scheduled cold-open work before any mark-only mailbox snapshot. */
   finishOrchestrationStartupMailRecovery(): Promise<void> | undefined {
+    const routing = this.restoredMailboxRouting
     const finish = this.finishRestoredWorkerMail
-    return finish?.().finally(() => {
+    if (!finish) {
+      return routing
+    }
+    const workers = finish().finally(() => {
       if (this.finishRestoredWorkerMail === finish) {
         this.finishRestoredWorkerMail = undefined
+      }
+    })
+    return routing ? Promise.all([routing, workers]).then(() => undefined) : workers
+  }
+
+  private trackRestoredMailboxRouting(): void {
+    const routing = this.scheduleRestoredMessageRepoints()
+    this.restoredMailboxRouting = routing
+    void routing?.finally(() => {
+      if (this.restoredMailboxRouting === routing) {
+        this.restoredMailboxRouting = undefined
       }
     })
   }
@@ -86,7 +102,7 @@ export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWith
     this.bindMailHandBack(db)
     this.bindCrewChanges(db)
     this.ensureOrchestrationFederationRelay()
-    this.scheduleRestoredMessageRepoints()
+    this.trackRestoredMailboxRouting()
     this.bindWorkerTerminalAutoRelease(db)
   }
 

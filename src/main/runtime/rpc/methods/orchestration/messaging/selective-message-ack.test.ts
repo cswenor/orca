@@ -195,6 +195,40 @@ it('validates the selection only after pending startup mail recovery has complet
   expect(db.getMessageById(selected.id)).toMatchObject({ to_handle: 'term_other', read: 0 })
 })
 
+it('acknowledges Run mail on a later page of restored mailbox routing', async () => {
+  const { db, runtime, activeRunId } = harness.setup()
+  const terminal = 'term_coord'
+  const messages = Array.from({ length: 103 }, (_, index) =>
+    db.insertMessage({
+      from: 'term_sender',
+      to: `run:${activeRunId}`,
+      runId: activeRunId,
+      subject: `Restored status ${index}`
+    })
+  )
+  db.db.prepare('UPDATE messages SET to_handle = ?').run(terminal)
+  runtime.setOrchestrationDb(db)
+  const stillDirect = messages.filter(
+    (message) => db.getMessageById(message.id)?.to_handle === terminal
+  )
+  expect(stillDirect).toHaveLength(53)
+  const selected = stillDirect[0]!
+  const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
+  await expect(
+    dispatcher.dispatch({
+      id: 'rpc_restored_run_mail',
+      authToken: 'test',
+      method: 'orchestration.ackMessages',
+      params: { terminal, ackIds: [selected.id] },
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+      orchestrationRequestId: 'restored_run_mail'
+    })
+  ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
+  expect(db.getMessageById(selected.id)).toMatchObject({ to_handle: `run:${activeRunId}`, read: 1 })
+  expect(messages.filter((message) => db.getMessageById(message.id)?.read === 0)).toHaveLength(102)
+  expect(db.getUnreadMessages(terminal)).toEqual([])
+})
+
 it.each(['worker_done', 'heartbeat'] as const)(
   'refuses a mixed selection containing a %s lifecycle report without taking mail',
   async (type) => {

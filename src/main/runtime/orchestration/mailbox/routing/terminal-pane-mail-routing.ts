@@ -280,7 +280,7 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     return structuredMailboxCustody(mailboxHandle, this._orchestrationDb)
   }
 
-  protected scheduleRestoredMessageRepoints(): void {
+  protected scheduleRestoredMessageRepoints(): Promise<void> | undefined {
     let handles: Set<string>
     try {
       const db = this._orchestrationDb
@@ -295,6 +295,7 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
       console.warn('[orchestration] failed to scan restored mailboxes', error)
       return
     }
+    let pending: Promise<void>[] | undefined
     for (const handle of handles) {
       try {
         if (handle.startsWith('run:') || handle.startsWith('dispatch:')) {
@@ -305,6 +306,10 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
         for (const mailbox of routed.mailboxes) {
           this.mailPointerRepointScheduler.schedule(mailbox.mailboxHandle)
         }
+        if (routed.completion) {
+          pending ??= []
+          pending.push(routed.completion)
+        }
         if (!routed.hasMore) {
           this.mailPointerRepointScheduler.schedule(handle)
         }
@@ -313,6 +318,7 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
         this.mailPointerRepointScheduler.schedule(handle)
       }
     }
+    return pending && Promise.all(pending).then(() => undefined)
   }
 
   protected repointPendingMessagesForHandle(handle: string): void {
