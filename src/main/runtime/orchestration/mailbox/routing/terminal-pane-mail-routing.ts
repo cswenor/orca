@@ -241,8 +241,8 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
   }
 
   /** Visible cleanup after a check or move. Only startup recovery waits for the resulting redrives. */
-  withdrawStaleChatMail(mailboxes?: Iterable<string>, waitForRedrives = false) {
-    return this.orchestrationMailboxNotifications.withdrawStaleChatMail(mailboxes, waitForRedrives)
+  withdrawStaleChatMail(mailboxes?: Iterable<string>, through?: number) {
+    return this.orchestrationMailboxNotifications.withdrawStaleChatMail(mailboxes, through)
   }
 
   /** Read current mailbox custody without settling a card or its reservation. */

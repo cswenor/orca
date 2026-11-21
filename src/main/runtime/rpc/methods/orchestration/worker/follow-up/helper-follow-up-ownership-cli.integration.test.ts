@@ -274,29 +274,62 @@ describe('which helpers a worker may continue, through CLI argv, RPC and SQLite'
     gate.resolve()
     const failed = failedReceipt.parse((await attempt).result)
     f.nextTerminal = 'term_helper_fresh'
+    const starting = h.deferred<void>()
+    const place = h.deferred<void>()
+    const create = vi.mocked(h.runtime.createTerminal).getMockImplementation()!
+    vi.mocked(h.runtime.createTerminal).mockImplementationOnce(async (...args) => {
+      starting.resolve()
+      await place.promise
+      return create(...args)
+    })
+    let laterSequence = Infinity
+    const laterJoined = h.deferred<'joined later mail'>()
+    const finishLater = h.deferred<void>()
     const routing = h.deferred<void>()
     const finishRouting = h.deferred<void>()
     const deliver = h.runtime.deliverPendingMessagesForHandle.bind(h.runtime)
     const delivery = vi.spyOn(h.runtime, 'deliverPendingMessagesForHandle')
-    delivery.mockImplementation((address, type, waitForRedrives) => {
-      const routed = deliver(address, type, waitForRedrives)
+    delivery.mockImplementation((address, type, through) => {
+      const routed = deliver(address, type, through)
       const successor = getFollowUpDispatch(h.db, failed.dispatchId)
-      if (address !== `dispatch:${successor?.id}` || !waitForRedrives) {
+      if (address !== `dispatch:${successor?.id}` || through === undefined) {
         return routed
       }
       routing.resolve()
-      return Promise.resolve(routed).then(() => finishRouting.promise)
+      return Promise.resolve(routed).then(async () => {
+        await finishRouting.promise
+        if (through >= laterSequence) {
+          laterJoined.resolve('joined later mail')
+          await finishLater.promise
+        }
+      })
     })
     const recovery = continueAllUnreadWorkerMail(h.runtime, h.db)
     try {
+      await Promise.race([
+        starting.promise,
+        recovery.then(() => {
+          throw new Error('Recovery completed without starting the worker')
+        })
+      ])
+      laterSequence = h.db.insertMessage({
+        from: 'term_coord',
+        to: 'term_worker',
+        subject: 'Independent mail during worker placement'
+      }).sequence
+      place.resolve()
       expect(await Promise.race([recovery.then(() => 'finished'), routing.promise])).toBeUndefined()
       const checkpoint = new Promise((resolve) => setImmediate(() => resolve('pending')))
       expect(await Promise.race([recovery.then(() => 'finished'), checkpoint])).toBe('pending')
       expect(getFollowUpDispatch(h.db, failed.dispatchId)?.creator_dispatch_id).toBe(
         worker.dispatchId
       )
-    } finally {
       finishRouting.resolve()
+      await expect(Promise.race([recovery, laterJoined.promise])).resolves.toBeUndefined()
+    } finally {
+      place.resolve()
+      finishRouting.resolve()
+      finishLater.resolve()
       await recovery
       delivery.mockRestore()
     }

@@ -1,5 +1,7 @@
+import type { OrchestrationDb } from '../../db/orchestration-db'
+
 export class StructuredMailboxRedriveState {
-  private readonly inFlight = new Map<string, number>()
+  private readonly inFlight = new Map<string, number | OrchestrationDb>()
   private readonly rerun = new Map<string, Set<string>>()
   private readonly idleWaiters = new Map<string, Map<number, PromiseWithResolvers<void>>>()
 
@@ -23,7 +25,7 @@ export class StructuredMailboxRedriveState {
     if (offering === undefined) {
       return undefined
     }
-    if (offering > throughSequence) {
+    if (oldestSequence(mailbox, offering) > throughSequence) {
       return undefined
     }
     let waiters = this.idleWaiters.get(mailbox)
@@ -39,12 +41,13 @@ export class StructuredMailboxRedriveState {
     return waiter.promise
   }
 
-  beforeOffering(mailbox: string, sequence: number): void {
-    this.inFlight.set(mailbox, sequence)
+  beforeWork(mailbox: string, oldest: number | OrchestrationDb): void {
+    this.inFlight.set(mailbox, oldest)
     const waiters = this.idleWaiters.get(mailbox)
     if (!waiters) {
       return
     }
+    const sequence = oldestSequence(mailbox, oldest)
     for (const [through, waiter] of waiters) {
       if (through < sequence) {
         waiters.delete(through)
@@ -54,10 +57,6 @@ export class StructuredMailboxRedriveState {
     if (waiters.size === 0) {
       this.idleWaiters.delete(mailbox)
     }
-  }
-
-  endOffer(mailbox: string): void {
-    this.inFlight.set(mailbox, 0)
   }
 
   finish(mailbox: string): Set<string> | undefined {
@@ -71,4 +70,8 @@ export class StructuredMailboxRedriveState {
     }
     return rerun
   }
+}
+
+function oldestSequence(mailbox: string, work: number | OrchestrationDb): number {
+  return typeof work === 'number' ? work : work.oldestStructuredMailboxWork(mailbox)
 }

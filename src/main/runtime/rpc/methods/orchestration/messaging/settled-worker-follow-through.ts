@@ -46,9 +46,9 @@ function continueUnreadWorkerMail(
   runtime: OrcaRuntimeService,
   db: OrchestrationDb,
   dispatchId: string,
-  restoring = false
+  recoveryThrough?: number
 ): Promise<void> {
-  return continueUnreadMail(runtime, db, dispatchId, restoring).catch((error: unknown) => {
+  return continueUnreadMail(runtime, db, dispatchId, recoveryThrough).catch((error: unknown) => {
     console.warn('[orchestration] unread worker mail was not continued', dispatchId, error)
   })
 }
@@ -69,13 +69,14 @@ async function continueUnreadMail(
   runtime: OrcaRuntimeService,
   db: OrchestrationDb,
   dispatchId: string,
-  restoring: boolean
+  recoveryThrough: number | undefined
 ): Promise<void> {
   const first = db.getUnreadMessages(`dispatch:${dispatchId}`, [...FOLLOW_UP_MESSAGE_TYPES])[0]
   if (!first) {
     clearFollowUpMail(db, dispatchId)
     return
   }
+  const restoring = recoveryThrough !== undefined
   const worker = db.getWorkerDispatch(dispatchId)
   if (worker?.state === 'stopped') {
     // Orca does not restart a stopped worker on its own; the next send carries its mail.
@@ -158,7 +159,7 @@ async function continueUnreadMail(
       restoring
     )
   }
-  const handback = passHeldWorkerMail(runtime, db, followUpId, restoring)
+  const handback = passHeldWorkerMail(runtime, db, followUpId, recoveryThrough)
   return handback && recovery
     ? Promise.all([handback, recovery]).then(() => undefined)
     : (handback ?? recovery)
@@ -182,7 +183,7 @@ export function passHeldWorkerMail(
   runtime: OrcaRuntimeService,
   db: OrchestrationDb,
   followUpId: string,
-  restoring = false
+  recoveryThrough?: number
 ): Promise<void> | undefined {
   // The follow-up's claim and the moves below re-address mail a chat may still hold as a card: the
   // lineage's mailboxes are the only ones whose cards can go stale.
@@ -197,10 +198,10 @@ export function passHeldWorkerMail(
   const lineageMailboxes = [...seen].map((id) => `dispatch:${id}`)
   const custody = custodyOf(db, followUpId)
   if (custody === 'starting') {
-    return runtime.withdrawStaleChatMail(lineageMailboxes, restoring)
+    return runtime.withdrawStaleChatMail(lineageMailboxes, recoveryThrough)
   }
   const worker = db.getWorkerDispatch(followUpId)
-  const notices: Promise<void>[] | undefined = restoring ? [] : undefined
+  const notices: Promise<void>[] | undefined = recoveryThrough === undefined ? undefined : []
   for (const source of [...seen].slice(1)) {
     const first = db.getDispatchContextById(source)?.follow_up_mail_at
       ? db.getUnreadMessages(`dispatch:${source}`, [...FOLLOW_UP_MESSAGE_TYPES])[0]
@@ -208,7 +209,13 @@ export function passHeldWorkerMail(
     if (first) {
       if (custody === 'failed') {
         const reason = worker?.last_error ?? worker?.state ?? 'unknown'
-        const notice = noticeUnreadMailNotContinued(runtime, db, source, reason, restoring)
+        const notice = noticeUnreadMailNotContinued(
+          runtime,
+          db,
+          source,
+          reason,
+          notices !== undefined
+        )
         if (notice) {
           notices?.push(notice)
         }
@@ -236,21 +243,20 @@ export function passHeldWorkerMail(
     // A follow-up that already finished holds this mail as any finished worker does.
     markUnreadFollowUpMail(db, followUpId)
   }
-  const withdrawal = runtime.withdrawStaleChatMail(lineageMailboxes, restoring)
+  const withdrawal = runtime.withdrawStaleChatMail(lineageMailboxes, recoveryThrough)
   const cleanup = notices?.length
     ? Promise.all(withdrawal ? [...notices, withdrawal] : notices).then(() => undefined)
     : withdrawal
   if (custody === 'ready') {
     // Its Task is in: a chat's moved mail follows it, each message whole.
     const mailbox = `dispatch:${followUpId}`
-    const through = restoring ? db.getMessageSequenceWatermark() : undefined
-    const wake = runtime.deliverPendingMessagesForHandle(mailbox, undefined, through)
+    const wake = runtime.deliverPendingMessagesForHandle(mailbox, undefined, recoveryThrough)
     return wake && cleanup ? Promise.all([wake, cleanup]).then(() => {}) : (wake ?? cleanup)
   }
   if (custody !== 'reported') {
     return cleanup
   }
-  const next = () => continueUnreadWorkerMail(runtime, db, followUpId, restoring)
+  const next = () => continueUnreadWorkerMail(runtime, db, followUpId, recoveryThrough)
   return cleanup ? cleanup.then(next) : next()
 }
 
@@ -274,20 +280,23 @@ export function continueRestoredWorkerMailSoon(
   db: OrchestrationDb,
   isCurrent: () => boolean
 ): Promise<void> {
+  const recoveryThrough = db.getMessageSequenceWatermark()
   return delay(0, undefined, { ref: false }).then(() =>
-    isCurrent() ? continueAllUnreadWorkerMail(runtime, db) : undefined
+    isCurrent() ? continueAllUnreadWorkerMail(runtime, db, recoveryThrough) : undefined
   )
 }
 
 /** At startup: continue what a restart interrupted between a report and its follow-up. */
 export async function continueAllUnreadWorkerMail(
   runtime: OrcaRuntimeService,
-  db: OrchestrationDb
+  db: OrchestrationDb,
+  recoveryThrough?: number
 ): Promise<void> {
   try {
     const ids = listDispatchesWithFollowUpMail(db)
     if (ids.length !== 0) {
-      await Promise.all(ids.map((id) => continueUnreadWorkerMail(runtime, db, id, true)))
+      const through = recoveryThrough ?? db.getMessageSequenceWatermark()
+      await Promise.all(ids.map((id) => continueUnreadWorkerMail(runtime, db, id, through)))
     }
   } catch (error) {
     // A database closed before this ran (shutdown, tests) has nothing left to continue.

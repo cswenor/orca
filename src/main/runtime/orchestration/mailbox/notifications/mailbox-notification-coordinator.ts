@@ -50,15 +50,16 @@ export class OrchestrationMailboxNotificationCoordinator<
 
   withdrawStaleChatMail(
     mailboxes: Iterable<string> | undefined,
-    waitForRedrives: boolean
+    through?: number
   ): Promise<void> | undefined {
     const { structuredPointerDelivery, getDb } = this.deps
-    if (!structuredPointerDelivery || !waitForRedrives) {
-      return structuredPointerDelivery?.withdrawStale(mailboxes)
+    if (!structuredPointerDelivery || through === undefined) {
+      structuredPointerDelivery?.withdrawStale(mailboxes)
+      return undefined
     }
     const targets = new Set(mailboxes ?? getDb()?.getStructuredMailSendMailboxes())
     structuredPointerDelivery.withdrawStale(targets)
-    return this.waitForRoutingRedrives(Promise.resolve(targets))
+    return this.waitForRoutingRedrives(Promise.resolve(targets), through)
   }
 
   waitForRoutingRedrives(
@@ -135,7 +136,7 @@ export class OrchestrationMailboxNotificationCoordinator<
   notifyMessageArrived(
     handle: string,
     messageType?: string,
-    waitForRecovery = false
+    through?: number
   ): Promise<void> | undefined {
     const { mailboxHandle, forwarded, directTypes } = this.resolveArrivedMailboxes(handle)
     this.notifyForwarded(forwarded)
@@ -157,8 +158,7 @@ export class OrchestrationMailboxNotificationCoordinator<
         waiters ? [...waiters].flatMap((waiter) => waiter.typeFilter ?? []) : []
       )
       // Let a check awakened in this drain mark its rows read before the push re-reads them.
-      if (waitForRecovery) {
-        const through = this.deps.getDb()?.getMessageSequenceWatermark?.() ?? 0
+      if (through !== undefined) {
         return Promise.resolve().then(() =>
           this.deliverForHandle(mailboxHandle, reservedTypes, through)
         )

@@ -200,10 +200,15 @@ export abstract class OrcaRuntimeWithRefreshFloatingWorkspacePtyLiveness extends
     if (messageType === 'heartbeat') {
       return
     }
+    const through = waitForRecovery
+      ? (this._orchestrationDb?.getMessageSequenceWatermark() ?? 0)
+      : undefined
     let scheduled: Promise<void> | undefined
     if (!handle.startsWith('dispatch:')) {
       this.mailPointerRepointScheduler.schedule(handle)
-      scheduled = waitForRecovery ? this.mailPointerRepointScheduler.completion(handle) : undefined
+      if (through !== undefined) {
+        scheduled = this.mailPointerRepointScheduler.completion(handle, through)
+      }
     } else {
       // A waiting ask rechecks its question, which a settled Dispatch has closed.
       this.messageWaiters.notifyPrefix(questionAnswerWaitPrefix(handle.slice('dispatch:'.length)))
@@ -213,7 +218,7 @@ export abstract class OrcaRuntimeWithRefreshFloatingWorkspacePtyLiveness extends
     const current = this.orchestrationMailboxNotifications.notifyMessageArrived(
       handle,
       messageType,
-      waitForRecovery
+      through
     )
     return scheduled && current
       ? Promise.all([scheduled, current]).then(() => undefined)

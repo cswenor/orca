@@ -37,6 +37,28 @@ export function getStructuredMailSends(
     .flatMap((row) => readStructuredMailSendRow(row) ?? [])
 }
 
+/** Recovery can ignore journal I/O for later mail only if no older pointer work depends on it. */
+export function oldestStructuredMailboxWork(this: OrchestrationDb, mailbox: string): number {
+  const { sequence } =
+    this.db
+      .prepare(
+        `SELECT MIN(sequence) AS sequence FROM (
+         SELECT sequence FROM (
+           SELECT sequence FROM messages
+            WHERE to_handle = ? AND read = 0 AND delivered_at IS NULL
+              AND delivery_contract = 'current_delivery'
+            ORDER BY sequence LIMIT 1
+         )
+         UNION ALL
+         SELECT COALESCE(message.sequence, 0) FROM structured_mail_sends AS send
+          LEFT JOIN messages AS message ON message.id = send.message_id
+          WHERE send.mailbox_handle = ?
+       )`
+      )
+      .get(mailbox, mailbox) ?? {}
+  return typeof sequence === 'number' ? sequence : Infinity
+}
+
 export function getStructuredMailSend(
   this: OrchestrationDb,
   mailboxHandle: string,
@@ -213,6 +235,7 @@ export function retireStructuredMailSend(
 export type StructuredMailSendStoreMethods = {
   getStructuredMailSendsForMessages: typeof getStructuredMailSendsForMessages
   getStructuredMailSends: typeof getStructuredMailSends
+  oldestStructuredMailboxWork: typeof oldestStructuredMailboxWork
   getStructuredMailSend: typeof getStructuredMailSend
   getStructuredMailSendMailboxes: typeof getStructuredMailSendMailboxes
   hasStructuredMailSend: typeof hasStructuredMailSend
@@ -227,6 +250,7 @@ export function attachStructuredMailSendStore(ctor: { prototype: object }): void
   Object.assign(ctor.prototype, {
     getStructuredMailSendsForMessages,
     getStructuredMailSends,
+    oldestStructuredMailboxWork,
     getStructuredMailSend,
     getStructuredMailSendMailboxes,
     hasStructuredMailSend,

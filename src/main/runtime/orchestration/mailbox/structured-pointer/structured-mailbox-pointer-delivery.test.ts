@@ -100,6 +100,15 @@ function harness(
     },
     getStructuredMailSends: (handle: string) =>
       [...records.values()].filter((row) => row.mailbox_handle === handle),
+    oldestStructuredMailboxWork: (handle: string) =>
+      Math.min(
+        ...[...records.values()]
+          .filter((row) => row.mailbox_handle === handle)
+          .map((row) => mail.get(row.message_id)?.sequence ?? 0),
+        ...[...mail.values()]
+          .filter((row) => row.to_handle === handle && !row.read && row.delivered_at === null)
+          .map((row) => row.sequence)
+      ),
     getStructuredMailSend: (_handle: string, id: string) => records.get(id),
     hasStructuredMailSend: (handle: string) =>
       [...records.values()].some((row) => row.mailbox_handle === handle),
@@ -320,6 +329,34 @@ it('finishes startup recovery without waiting for a subsequent structured mail a
     first.resolve({ kind: 'queued' })
     later.resolve({ kind: 'queued' })
     await flush()
+  }
+})
+
+it('does not wait for journal settlement that belongs only to later structured mail', async () => {
+  const h = harness({ busy: true })
+  h.receive('restored')
+  const through = h.mail.get('restored')!.sequence
+  h.mail.get('restored')!.read = 1
+  h.receive('later')
+  await h.deliver()
+  const observe = h.host.observeMail!
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  vi.spyOn(h.host, 'observeMail').mockImplementationOnce(async (attempt) => {
+    entered.resolve()
+    await release.promise
+    return observe(attempt)
+  })
+  h.delivery.withdrawStale(['dispatch:d1'])
+  try {
+    await entered.promise
+    const recovered = vi.fn()
+    void Promise.resolve(h.delivery.whenIdle('dispatch:d1', through)).then(recovered)
+    await Promise.resolve()
+    expect(recovered).toHaveBeenCalledOnce()
+  } finally {
+    release.resolve()
+    await h.delivery.whenIdle('dispatch:d1')
   }
 })
 

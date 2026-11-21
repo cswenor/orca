@@ -41,6 +41,9 @@ export class MailPointerRepointScheduler {
     if (!pending) {
       pending = { through, completion: Promise.withResolvers<void>() }
       this.completions.set(handle, pending)
+    } else {
+      // One timer can be queued for restored mail before a restored worker queues its notice.
+      pending.through = Math.max(pending.through, through)
     }
     return pending.completion.promise
   }

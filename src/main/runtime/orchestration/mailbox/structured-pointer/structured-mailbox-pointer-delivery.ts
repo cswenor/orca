@@ -166,11 +166,11 @@ export class OrchestrationStructuredMailboxPointerDelivery<
     // Each message is offered to each owner once per pass; one it no longer owes waits for an edge.
     const offered = new Set<string>()
     for (;;) {
-      this.redrives.endOffer(mailboxHandle)
       const db = this.deps.getDb()
       if (!db) {
         return
       }
+      this.redrives.beforeWork(mailboxHandle, db)
       // Earlier sends only when something they wait on moved: a fresh arrival or the next page
       // finds them reserved (stamped delivered), so selection skips them anyway.
       const owner = this.deps.resolveStructuredTarget(mailboxHandle)?.sessionId ?? null
@@ -247,7 +247,7 @@ export class OrchestrationStructuredMailboxPointerDelivery<
         offered.add(key)
         // Parked first, so a send that throws is retried on this session's next journal edge.
         this.parking.park(mailboxHandle, target.sessionId, currentReservedTypes)
-        this.redrives.beforeOffering(mailboxHandle, message.sequence)
+        this.redrives.beforeWork(mailboxHandle, message.sequence)
         if ((await this.admit(db, mailboxHandle, target, message, senderSnapshot)) === 'park') {
           // An edge during the send may have taken the entry; the refusal still waits for the next one.
           this.parking.park(mailboxHandle, target.sessionId, currentReservedTypes)
