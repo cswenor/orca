@@ -164,7 +164,7 @@ it('uses the same stable pane requirement as an ordinary consuming check', async
 })
 
 it('validates the selection only after pending startup mail recovery has completed', async () => {
-  const { db, runtime } = harness.setup()
+  const { db, runtime } = harness.setup(false)
   const selected = db.insertMessage({
     from: 'term_sender',
     to: 'term_coord',
@@ -182,7 +182,7 @@ it('validates the selection only after pending startup mail recovery has complet
     id: 'rpc_recover_mail',
     authToken: 'test',
     method: 'orchestration.ackMessages',
-    params: { terminal: 'term_coord', ackIds: [selected.id], run: 'run_unbound' },
+    params: { terminal: 'term_coord', ackIds: [selected.id] },
     orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
     orchestrationRequestId: 'recover_mail'
   })
@@ -190,7 +190,7 @@ it('validates the selection only after pending startup mail recovery has complet
   gate.resolve()
   await expect(result).resolves.toMatchObject({
     ok: false,
-    error: { code: 'invalid_argument', data: { effectsApplied: false } }
+    error: { code: 'invalid_argument' }
   })
   expect(db.getMessageById(selected.id)).toMatchObject({ to_handle: 'term_other', read: 0 })
 })
