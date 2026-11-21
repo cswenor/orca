@@ -62,10 +62,19 @@ export class OrchestrationMailboxPointerState {
     }
     flight.deferredUntilIdle = true
     flight.idleObservedWhileDeferred = false
-    if (flight.submitEnter) {
-      flight.startupCompletion?.resolve()
-    }
     return true
+  }
+
+  finishStartupWaitIfParked(ptyId: string): void {
+    const flight = this.flightsByPtyId.get(ptyId)
+    if (flight?.deferredUntilIdle && flight.submitEnter) {
+      this.finishStartupWait(flight)
+    }
+  }
+
+  finishStartupWait(flight: OrchestrationMailboxDeliveryFlight): void {
+    flight.startupCompletion?.resolve()
+    flight.startupCompletion = undefined
   }
 
   takeDeferredEnter(ptyId: string): (() => void) | null {
@@ -92,7 +101,7 @@ export class OrchestrationMailboxPointerState {
       return null
     }
     this.flightsByPtyId.delete(ptyId)
-    flight.startupCompletion?.resolve()
+    this.finishStartupWait(flight)
     const parked = this.parkedDeliveriesByPtyId.get(ptyId) ?? null
     this.parkedDeliveriesByPtyId.delete(ptyId)
     return parked

@@ -38,7 +38,7 @@ export class OrchestrationMailboxNotificationCoordinator<
     reservedTypes?: ReadonlySet<string>,
     waitForRedrives = false
   ): Promise<void> | undefined {
-    const { mailboxOwner, pointerDelivery, structuredPointerDelivery } = this.deps
+    const { pointerDelivery, structuredPointerDelivery } = this.deps
     const terminal = structuredPointerDelivery?.deliverForHandle(handle, reservedTypes)
       ? undefined
       : pointerDelivery.deliverForHandle(handle, reservedTypes, waitForRedrives)
@@ -54,13 +54,22 @@ export class OrchestrationMailboxNotificationCoordinator<
       pending.push(structured)
     }
     if (terminal?.routing) {
-      pending.push(
-        structuredPointerDelivery
-          ? mailboxOwner.waitForRoutingRedrives(terminal.routing, structuredPointerDelivery)
-          : terminal.routing.then(() => undefined)
-      )
+      pending.push(this.waitForRoutingRedrives(terminal.routing))
     }
     return pending.length > 1 ? Promise.all(pending).then(() => undefined) : pending[0]
+  }
+
+  waitForRoutingRedrives(completion: Promise<ReadonlySet<string>>): Promise<void> {
+    const { mailboxOwner, pointerDelivery, structuredPointerDelivery } = this.deps
+    return mailboxOwner.waitForRoutingRedrives(completion, {
+      whenIdle: (handle) => {
+        const terminal = pointerDelivery.whenRecoveryIdle(handle)
+        const structured = structuredPointerDelivery?.whenIdle(handle)
+        return terminal && structured
+          ? Promise.all([terminal, structured]).then(() => undefined)
+          : (terminal ?? structured)
+      }
+    })
   }
 
   deliverForTerminal(terminal: OrchestrationMailboxTerminal): void {

@@ -326,16 +326,19 @@ export class InMemoryOrchestrationMessages {
     const advanced = this.messages.filter(
       (message) =>
         selected.has(message.id) &&
-        message.read === 0 &&
-        message.pointer_enter_pending === from &&
-        message.pointer_pty_id === target.ptyId &&
-        message.pointer_process_incarnation === target.processIncarnation
+        ((to === 3 && message.read === 1 && message.pointer_enter_pending === 0) ||
+          ((to === 3 || message.read === 0) &&
+            message.pointer_enter_pending === from &&
+            message.pointer_pty_id === target.ptyId &&
+            message.pointer_process_incarnation === target.processIncarnation))
     )
     if (advanced.length !== ids.length) {
       return false
     }
     for (const message of advanced) {
-      message.pointer_enter_pending = to
+      if (message.pointer_enter_pending === from) {
+        message.pointer_enter_pending = to
+      }
     }
     return true
   }

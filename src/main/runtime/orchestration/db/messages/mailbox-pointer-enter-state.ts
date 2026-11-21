@@ -123,9 +123,10 @@ export function markMailboxPointerEnterAttempted(
       ids,
       (placeholders) => ({
         sql: `UPDATE messages
-          SET pointer_enter_pending = ?
-          WHERE read = 0 AND pointer_enter_pending = ?
-            AND pointer_pty_id = ? AND pointer_process_incarnation = ?
+          SET pointer_enter_pending = CASE WHEN pointer_enter_pending = 0 THEN 0 ELSE ? END
+          WHERE ((pointer_enter_pending = ?
+              AND pointer_pty_id = ? AND pointer_process_incarnation = ?)
+            OR (read = 1 AND pointer_enter_pending = 0))
             AND id IN (${placeholders})`,
         leadingParams: [
           MAILBOX_POINTER_ENTER_ATTEMPTED,

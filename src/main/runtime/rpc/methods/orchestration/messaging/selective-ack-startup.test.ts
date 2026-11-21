@@ -5,6 +5,7 @@ import { ORCHESTRATION_METHODS } from '../orchestration'
 import { ORCHESTRATION_CONTRACT_VERSION } from '../../../../../../shared/orchestration/orchestration-runtime-capabilities'
 import { OrchestrationMailboxOwner } from '../../../../orchestration/mailbox/routing/mailbox-owner'
 import { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
+import { MAILBOX_POINTER_ENTER_ATTEMPTED } from '../../../../orchestration/db/messages/mailbox-pointer-enter-state'
 import {
   createBoundRun,
   createRuntime,
@@ -211,14 +212,16 @@ it('waits for every PTY routing page before acknowledging direct-addressed Run m
   expect(db.getUnreadMessages(terminal.handle)).toEqual([])
 })
 
-it('waits for restored PTY pointer text and Enter to settle before marking mail', async () => {
+it('waits for the restored PTY probe, pointer text, and Enter before marking mail', async () => {
   vi.useFakeTimers()
   const db = new OrchestrationDb(':memory:')
+  const probe = Promise.withResolvers<boolean>()
   const text = Promise.withResolvers<typeof WRITE_ACCEPTED>()
   const enter = Promise.withResolvers<typeof WRITE_ACCEPTED>()
   try {
-    const { runtime, write } = await createRuntime(db)
+    const { runtime } = await createRuntime(db)
     await driveToLiveIdle(runtime)
+    const write = vi.fn((_ptyId: string, _data: string) => true)
     runtime.setPtyController({
       write,
       writeWithSettlement: (ptyId, data) => {
@@ -226,6 +229,7 @@ it('waits for restored PTY pointer text and Enter to settle before marking mail'
         return data === '\r' ? enter.promise : text.promise
       },
       kill: vi.fn(),
+      probePtyLiveness: () => probe.promise,
       getForegroundProcess: async () => null
     })
     const run = createBoundRun(db, 'Restored PTY')
@@ -234,6 +238,12 @@ it('waits for restored PTY pointer text and Enter to settle before marking mail'
       to: `run:${run.id}`,
       runId: run.id,
       subject: 'Restored while terminal is idle'
+    })
+    const alreadyRead = db.insertMessage({
+      from: 'term_sender',
+      to: `run:${run.id}`,
+      runId: run.id,
+      subject: 'Read independently before the staged check is submitted'
     })
     runtime.setOrchestrationDb(db)
     const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
@@ -246,12 +256,20 @@ it('waits for restored PTY pointer text and Enter to settle before marking mail'
       orchestrationRequestId: 'restored_pointer'
     })
     await vi.advanceTimersByTimeAsync(2_001)
+    expect(pointerCount(write)).toBe(0)
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+    probe.resolve(true)
+    await vi.advanceTimersByTimeAsync(2_001)
     expect(pointerCount(write)).toBe(1)
     expect(db.getMessageById(selected.id)?.read).toBe(0)
+    db.markAsRead([alreadyRead.id])
     text.resolve(WRITE_ACCEPTED)
     await vi.advanceTimersByTimeAsync(500)
     expect(write.mock.calls.filter(([, data]) => data === '\r')).toHaveLength(1)
-    expect(db.getMessageById(selected.id)?.read).toBe(0)
+    expect(db.getMessageById(selected.id)).toMatchObject({
+      read: 0,
+      pointer_enter_pending: MAILBOX_POINTER_ENTER_ATTEMPTED
+    })
     enter.resolve(WRITE_ACCEPTED)
     await expect(result).resolves.toMatchObject({
       ok: true,
@@ -259,6 +277,7 @@ it('waits for restored PTY pointer text and Enter to settle before marking mail'
     })
     expect(db.getMessageById(selected.id)).toMatchObject({ read: 1, pointer_enter_pending: 0 })
   } finally {
+    probe.resolve(true)
     text.resolve(WRITE_ACCEPTED)
     enter.resolve(WRITE_ACCEPTED)
     vi.useRealTimers()

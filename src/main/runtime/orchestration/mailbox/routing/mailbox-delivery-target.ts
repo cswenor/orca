@@ -14,8 +14,13 @@ type OrchestrationMailboxDeliveryTargetDependencies = {
   isLeafPtyProvenAbsent: (ptyId: string) => Promise<boolean>
 }
 
+type DeferredProbe = {
+  mailboxes: Set<string>
+  completion?: PromiseWithResolvers<void>
+}
+
 export class OrchestrationMailboxDeliveryTarget {
-  private readonly probeDeferredMailboxes = new Map<string, Set<string>>()
+  private readonly probeDeferredMailboxes = new Map<string, DeferredProbe>()
 
   constructor(private readonly deps: OrchestrationMailboxDeliveryTargetDependencies) {}
 
@@ -80,6 +85,11 @@ export class OrchestrationMailboxDeliveryTarget {
         }
   }
 
+  whenProbeIdle(ptyId: string): Promise<void> | undefined {
+    const probe = this.probeDeferredMailboxes.get(ptyId)
+    return probe && (probe.completion ??= Promise.withResolvers<void>()).promise
+  }
+
   deferForAbsenceProbe(
     ptyId: string,
     mailboxHandle: string,
@@ -96,22 +106,36 @@ export class OrchestrationMailboxDeliveryTarget {
     // A coordinator of several Runs can defer one mailbox per Run on the same probe.
     const deferred = this.probeDeferredMailboxes.get(ptyId)
     if (deferred) {
-      deferred.add(mailboxHandle)
+      deferred.mailboxes.add(mailboxHandle)
       return true
     }
-    const mailboxes = new Set([mailboxHandle])
-    this.probeDeferredMailboxes.set(ptyId, mailboxes)
-    void this.deps
-      .isLeafPtyProvenAbsent(ptyId)
-      .then((absent) => {
-        this.probeDeferredMailboxes.delete(ptyId)
-        if (!absent) {
-          for (const deferredMailbox of mailboxes) {
-            setTimeout(() => redeliver(deferredMailbox), 0)
+    const probe: DeferredProbe = {
+      mailboxes: new Set([mailboxHandle])
+    }
+    this.probeDeferredMailboxes.set(ptyId, probe)
+    const finish = (retry: boolean) => {
+      this.probeDeferredMailboxes.delete(ptyId)
+      if (retry) {
+        for (const deferredMailbox of probe.mailboxes) {
+          try {
+            redeliver(deferredMailbox)
+          } catch {
+            // Persisted mail remains available after a failed delivery retry.
           }
         }
-      })
-      .catch(() => this.probeDeferredMailboxes.delete(ptyId))
+      }
+      probe.completion?.resolve()
+    }
+    void this.deps.isLeafPtyProvenAbsent(ptyId).then(
+      (absent) => {
+        if (absent) {
+          finish(false)
+        } else {
+          setTimeout(() => finish(true), 0)
+        }
+      },
+      () => finish(false)
+    )
     return true
   }
 }

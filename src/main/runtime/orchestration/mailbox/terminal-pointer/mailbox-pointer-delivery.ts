@@ -53,12 +53,23 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
       }
       return {
         routing: this.deps.mailboxOwner.pendingDirectReconciliation(terminal.ptyId),
-        flight: this.state.whenFlightSettledOrParked(terminal.ptyId)
+        flight: this.whenPtyRecoveryIdle(terminal.ptyId)
       }
     } catch {
       // Persisted mail remains available to explicit check or the terminal's next input edge.
       return undefined
     }
+  }
+
+  whenRecoveryIdle(handle: string): Promise<void> | undefined {
+    const terminal = this.deps.deliveryTarget.resolveTerminal(handle)
+    return terminal ? this.whenPtyRecoveryIdle(terminal.ptyId) : undefined
+  }
+
+  private whenPtyRecoveryIdle(ptyId: string): Promise<void> | undefined {
+    const pending =
+      this.deps.deliveryTarget.whenProbeIdle(ptyId) ?? this.state.whenFlightSettledOrParked(ptyId)
+    return pending?.then(() => this.whenPtyRecoveryIdle(ptyId))
   }
 
   deliver(
@@ -173,7 +184,9 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
   retirePty(ptyId: string): void {
     this.coldParkedPtys.delete(ptyId)
     const { flight, releasedMailboxes } = this.state.retirePty(ptyId)
-    flight?.startupCompletion?.resolve()
+    if (flight) {
+      this.state.finishStartupWait(flight)
+    }
     if (flight?.enterTimer != null) {
       clearTimeout(flight.enterTimer)
     }
@@ -201,6 +214,7 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
       if (this.state.hasFlight(ptyId)) {
         if (this.coldParkedPtys.has(ptyId)) {
           this.state.deferFlightUntilIdle(ptyId)
+          this.state.finishStartupWaitIfParked(ptyId)
         }
         return
       }

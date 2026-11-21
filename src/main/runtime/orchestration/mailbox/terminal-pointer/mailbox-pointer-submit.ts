@@ -91,12 +91,11 @@ export function submitOrchestrationMailboxPointer(
       } else {
         preserveAmbiguousDelivery = true
         const db = deps.getDb()
-        if (db?.markMailboxPointerEnterAttempted(messageIds, reservationTarget)) {
-          expectedPhase = MAILBOX_POINTER_ENTER_ATTEMPTED
-        } else if (db?.areUnreadMessages(input.mailboxHandle, messageIds) !== false) {
-          // Unread mail lost its claim to an earlier Enter or a release; read mail still gets its Enter.
+        // A partial read may clear some claims; every remaining claim must still record Enter.
+        if (!db?.markMailboxPointerEnterAttempted(messageIds, reservationTarget)) {
           return
         }
+        expectedPhase = MAILBOX_POINTER_ENTER_ATTEMPTED
         const enterSettlement = await deps.writePty(input.ptyId, '\r')
         submitted = enterSettlement.outcome === 'accepted'
         if (!deps.state.isCurrentFlight(input.ptyId, input.flight)) {
@@ -117,7 +116,7 @@ export function submitOrchestrationMailboxPointer(
     })
     .finally(() => {
       if (deferredUntilIdle) {
-        input.flight.startupCompletion?.resolve()
+        deps.state.finishStartupWaitIfParked(input.ptyId)
         return
       }
       let released = false

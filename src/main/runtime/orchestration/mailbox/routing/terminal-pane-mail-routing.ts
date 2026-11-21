@@ -296,7 +296,7 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     }
     const pending = new Set<Promise<void>>()
     const owner = this.orchestrationMailboxOwner
-    const delivery = this.orchestrationStructuredMailboxPointerDelivery
+    const delivery = this.orchestrationMailboxNotifications
     const repoint = (handle: string) => {
       this.mailPointerRepointScheduler.schedule(handle)
       pending.add(this.mailPointerRepointScheduler.completion(handle))
@@ -312,7 +312,7 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
           repoint(mailbox.mailboxHandle)
         }
         if (routed.completion) {
-          pending.add(owner.waitForRoutingRedrives(routed.completion, delivery))
+          pending.add(delivery.waitForRoutingRedrives(routed.completion))
         }
         if (!routed.hasMore) {
           repoint(handle)
