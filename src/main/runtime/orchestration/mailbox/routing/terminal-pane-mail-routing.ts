@@ -284,25 +284,22 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
     let handles: Set<string>
     try {
       const db = this._orchestrationDb
-      // Pointer-phase rows are excluded from the undelivered scan, so they need their own.
+      // The undelivered scan omits pending pointers and mail already held by a chat.
       handles = new Set([
         ...(db?.getUndeliveredUnreadMailboxHandles?.() ?? []),
         ...(db?.getPendingMailboxPointerHandles?.() ?? []),
-        // Delivered mail a chat still holds: what became of it is read on this pass.
         ...(db?.getStructuredMailSendMailboxes?.() ?? [])
       ])
     } catch (error) {
       console.warn('[orchestration] failed to scan restored mailboxes', error)
       return
     }
-    let pending: Set<Promise<void>> | undefined
-    const waitFor = (completion: Promise<void>) => {
-      pending ??= new Set()
-      pending.add(completion)
-    }
+    const pending = new Set<Promise<void>>()
+    const owner = this.orchestrationMailboxOwner
+    const delivery = this.orchestrationStructuredMailboxPointerDelivery
     const repoint = (handle: string) => {
       this.mailPointerRepointScheduler.schedule(handle)
-      waitFor(this.mailPointerRepointScheduler.completion(handle))
+      pending.add(this.mailPointerRepointScheduler.completion(handle))
     }
     for (const handle of handles) {
       try {
@@ -310,12 +307,12 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
           repoint(handle)
           continue
         }
-        const routed = this.orchestrationMailboxOwner.routeDetachedDirectMessages(handle)
+        const routed = owner.routeDetachedDirectMessages(handle)
         for (const mailbox of routed.mailboxes) {
           repoint(mailbox.mailboxHandle)
         }
         if (routed.completion) {
-          waitFor(routed.completion)
+          pending.add(owner.waitForDetachedRedrives(routed.completion, delivery))
         }
         if (!routed.hasMore) {
           repoint(handle)
@@ -325,7 +322,7 @@ export abstract class OrcaRuntimeWithGetPtyRecordForPaneKey extends OrcaRuntimeW
         repoint(handle)
       }
     }
-    return pending && Promise.all(pending).then(() => undefined)
+    return pending.size ? Promise.all(pending).then(() => undefined) : undefined
   }
 
   protected repointPendingMessagesForHandle(

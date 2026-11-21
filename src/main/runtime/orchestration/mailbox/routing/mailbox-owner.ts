@@ -33,7 +33,7 @@ export type RoutedOrchestrationMailbox = {
 export type DetachedMailboxRoutingPage = {
   mailboxes: RoutedOrchestrationMailbox[]
   hasMore: boolean
-  completion?: Promise<void>
+  completion?: Promise<ReadonlySet<string>>
 }
 
 type OrchestrationMailboxOwnerDependencies = {
@@ -46,7 +46,10 @@ type OrchestrationMailboxOwnerDependencies = {
 
 export class OrchestrationMailboxOwner {
   private readonly pendingDirectReconciliations = new Set<string>()
-  private readonly pendingDetachedDirectReconciliations = new Map<string, Promise<void>>()
+  private readonly pendingDetachedDirectReconciliations = new Map<
+    string,
+    Promise<ReadonlySet<string>>
+  >()
 
   constructor(private readonly deps: OrchestrationMailboxOwnerDependencies) {}
 
@@ -159,6 +162,16 @@ export class OrchestrationMailboxOwner {
     return routed
   }
 
+  async waitForDetachedRedrives(
+    completion: Promise<ReadonlySet<string>>,
+    delivery: { whenIdle(mailbox: string): Promise<void> | undefined }
+  ): Promise<void> {
+    // Notifications were queued before this promise resolved. Join their redrives without
+    // scheduling a second push or changing the ordinary notification order.
+    const mailboxes = await completion
+    await Promise.all(Array.from(mailboxes, (mailbox) => delivery.whenIdle(mailbox)))
+  }
+
   private routeDetachedDirectPage(
     directHandle: string,
     paneKey?: string
@@ -264,12 +277,14 @@ export class OrchestrationMailboxOwner {
   private scheduleDetachedDirectReconciliation(
     directHandle: string,
     paneKey?: string
-  ): Promise<void> {
-    const { promise, resolve } = Promise.withResolvers<void>()
+  ): Promise<ReadonlySet<string>> {
+    const { promise, resolve } = Promise.withResolvers<ReadonlySet<string>>()
+    const notified = new Set<string>()
     const advance = () => {
       try {
         const routed = this.routeDetachedDirectPage(directHandle, paneKey)
         for (const mailbox of routed.mailboxes) {
+          notified.add(mailbox.mailboxHandle)
           for (const type of mailbox.types) {
             this.deps.onForeignMailboxRouted(mailbox.mailboxHandle, type)
           }
@@ -279,13 +294,14 @@ export class OrchestrationMailboxOwner {
           return
         }
         for (const type of this.deps.getDb()?.getUnreadDirectMessageTypes(directHandle) ?? []) {
+          notified.add(directHandle)
           this.deps.onForeignMailboxRouted(directHandle, type)
         }
       } catch (error) {
         console.warn(`[orchestration] failed to continue routing mailbox ${directHandle}`, error)
       }
       this.pendingDetachedDirectReconciliations.delete(directHandle)
-      resolve()
+      resolve(notified)
     }
     this.pendingDetachedDirectReconciliations.set(directHandle, promise)
     setImmediate(advance)
