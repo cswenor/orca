@@ -13,7 +13,7 @@ import { OrcaRuntimeWithAutomationApiOperations } from '../../workspaces/persist
 
 export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWithAutomationApiOperations {
   private orchestrationDbMaintenance: OrchestrationDbMaintenance | undefined
-  private finishRestoredWorkerMail: (() => Promise<void>) | undefined
+  private restoredWorkerMail: Promise<void> | undefined
   private restoredMailboxRouting: Promise<void> | undefined
 
   abstract ensureOrchestrationFederationRelay(
@@ -29,7 +29,7 @@ export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWith
   ): boolean
 
   /** Mail a worker left unread when it reported before a restart still continues it. */
-  protected abstract continueRestoredWorkerMail(db: OrchestrationDb): () => Promise<void>
+  protected abstract continueRestoredWorkerMail(db: OrchestrationDb): Promise<void>
 
   // Defer until userData is final; tests can inject an in-memory DB.
   getOrchestrationDb(): OrchestrationDb {
@@ -53,26 +53,26 @@ export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWith
       this.bindWorkerTerminalAutoRelease(this._orchestrationDb)
       // Recover deadlines armed before a restart.
       getWorkerTerminalAutoReleaseScheduler(this).rearm()
-      this.finishRestoredWorkerMail = this.continueRestoredWorkerMail(db)
+      const workers = this.continueRestoredWorkerMail(db)
+      this.restoredWorkerMail = workers
+      void workers.finally(() => {
+        if (this.restoredWorkerMail === workers) {
+          this.restoredWorkerMail = undefined
+        }
+      })
       // No terminal prompt's hold survives a restart; its card must not stay answerable.
       closeOrphanedTerminalApprovals(this._orchestrationDb)
     }
     return this._orchestrationDb
   }
 
-  /** Finish already-scheduled cold-open work before any mark-only mailbox snapshot. */
-  finishOrchestrationStartupMailRecovery(): Promise<void> | undefined {
+  /** Join the ordinary startup scheduler without starting its work early. */
+  waitForOrchestrationStartupMailRecovery(): Promise<void> | undefined {
     const routing = this.restoredMailboxRouting
-    const finish = this.finishRestoredWorkerMail
-    if (!finish) {
-      return routing
-    }
-    const workers = finish().finally(() => {
-      if (this.finishRestoredWorkerMail === finish) {
-        this.finishRestoredWorkerMail = undefined
-      }
-    })
-    return routing ? Promise.all([routing, workers]).then(() => undefined) : workers
+    const workers = this.restoredWorkerMail
+    return routing && workers
+      ? Promise.all([routing, workers]).then(() => undefined)
+      : (routing ?? workers)
   }
 
   private trackRestoredMailboxRouting(): void {
@@ -93,7 +93,7 @@ export abstract class RuntimeOrchestrationDatabaseAccess extends OrcaRuntimeWith
   }
 
   setOrchestrationDb(db: OrchestrationDb): void {
-    this.finishRestoredWorkerMail = undefined
+    this.restoredWorkerMail = undefined
     this.orchestrationDbMaintenance?.stop()
     this.orchestrationDbMaintenance = undefined
     this.orchestrationFederation.resetForDatabaseChange()

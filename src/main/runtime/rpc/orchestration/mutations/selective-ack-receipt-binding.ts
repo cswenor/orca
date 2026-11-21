@@ -44,30 +44,33 @@ export async function runSelectiveAckMutation(
     )
   }
   const db = runtime.getOrchestrationDb()
-  const recovery = runtime.finishOrchestrationStartupMailRecovery()
-  if (recovery) {
-    await recovery
-  }
-  const readBinding = () => selectiveAckReceiptBinding(runtime, request, params, caller)
-  const target = readBinding()
   const fingerprint = callerFingerprint ?? db.readLocalMutationCallerFingerprint()
   if (fingerprint === undefined) {
     throw new Error('Local mutation caller identity was not initialized.')
   }
-  const existing = db.getMutationReceipt(fingerprint, requestId)
-  if (
-    !existing &&
-    params &&
-    typeof params === 'object' &&
-    'replayOnly' in params &&
-    params.replayOnly === true
-  ) {
-    throw new OrchestrationError(
-      'operation_unknown',
-      `Selective acknowledgment ${requestId} has no stored receipt. Inspect the mailbox before issuing a fresh request.`,
-      { effectsApplied: false }
-    )
+  const replayOnly =
+    params && typeof params === 'object' && 'replayOnly' in params && params.replayOnly === true
+  const readReceipt = () => {
+    const receipt = db.getMutationReceipt(fingerprint, requestId)
+    if (!receipt && replayOnly) {
+      throw new OrchestrationError(
+        'operation_unknown',
+        `Selective acknowledgment ${requestId} has no stored receipt. Inspect the mailbox before issuing a fresh request.`,
+        { effectsApplied: false }
+      )
+    }
+    return receipt
   }
+  if (replayOnly) {
+    readReceipt()
+  }
+  const recovery = runtime.waitForOrchestrationStartupMailRecovery()
+  if (recovery) {
+    await recovery
+  }
+  const existing = readReceipt()
+  const readBinding = () => selectiveAckReceiptBinding(runtime, request, params, caller)
+  const target = readBinding()
   const binding = hashCanonical(target)
   const { method } = request
   const payloadHash = hashCanonical({

@@ -295,10 +295,10 @@ class OrcaRuntimeService extends OrcaRuntimeSidebarBase {
     this.workspaceLayoutStream.markLiveTitlesDirty(ref)
   }
 
-  protected continueRestoredWorkerMail(db: OrchestrationDb): () => Promise<void> {
-    const finish = continueRestoredWorkerMailSoon(this, db, () => this._orchestrationDb === db)
+  protected continueRestoredWorkerMail(db: OrchestrationDb): Promise<void> {
+    const completion = continueRestoredWorkerMailSoon(this, db, () => this._orchestrationDb === db)
     botGroups.startBotGroupsSoon(this, () => this._orchestrationDb === db)
-    return finish
+    return completion
   }
 
   /** Read-only layout stream; layout.subscribe is not advertised yet. */

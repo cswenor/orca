@@ -16,7 +16,7 @@ it('validates the selection only after pending startup mail recovery has complet
   })
   const gate = Promise.withResolvers<void>()
   const entered = Promise.withResolvers<void>()
-  vi.spyOn(runtime, 'finishOrchestrationStartupMailRecovery').mockImplementation(async () => {
+  vi.spyOn(runtime, 'waitForOrchestrationStartupMailRecovery').mockImplementation(async () => {
     entered.resolve()
     await gate.promise
     db.db.prepare('UPDATE messages SET to_handle = ? WHERE id = ?').run('term_other', selected.id)
@@ -37,6 +37,39 @@ it('validates the selection only after pending startup mail recovery has complet
     error: { code: 'invalid_argument' }
   })
   expect(db.getMessageById(selected.id)).toMatchObject({ to_handle: 'term_other', read: 0 })
+})
+
+it('refuses an unknown retry without waiting for scheduled mailbox recovery', async () => {
+  const { db, runtime } = harness.setup(false)
+  const selected = db.insertMessage({
+    from: 'term_sender',
+    to: 'term_coord',
+    subject: 'still unread'
+  })
+  const recovery = Promise.withResolvers<void>()
+  const waiting = Promise.withResolvers<'waiting'>()
+  vi.spyOn(runtime, 'waitForOrchestrationStartupMailRecovery').mockImplementation(() => {
+    waiting.resolve('waiting')
+    return recovery.promise
+  })
+  const result = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS }).dispatch({
+    id: 'rpc_unknown_retry_startup',
+    authToken: 'test',
+    method: 'orchestration.ackMessages',
+    params: { terminal: 'term_coord', ackIds: [selected.id], replayOnly: true },
+    orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+    orchestrationRequestId: 'unknown_retry_startup'
+  })
+  try {
+    await expect(Promise.race([result, waiting.promise])).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'operation_unknown' }
+    })
+    expect(db.getMessageById(selected.id)?.read).toBe(0)
+  } finally {
+    recovery.resolve()
+    await result
+  }
 })
 
 it('does not take Run mail reserved by its scheduled startup repoint', async () => {

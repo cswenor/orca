@@ -283,18 +283,17 @@ export function continueRestoredWorkerMailSoon(
   runtime: OrcaRuntimeService,
   db: OrchestrationDb,
   isCurrent: () => boolean
-): () => Promise<void> {
-  let completion: Promise<void> | undefined
-  const finish = () =>
-    (completion ??= Promise.resolve().then(async () => {
-      clearTimeout(timer)
-      if (isCurrent()) {
-        await continueAllUnreadWorkerMail(runtime, db)
-      }
-    }))
-  const timer = setTimeout(() => void finish(), 0)
+): Promise<void> {
+  const { promise, resolve, reject } = Promise.withResolvers<void>()
+  const timer = setTimeout(() => {
+    if (isCurrent()) {
+      void continueAllUnreadWorkerMail(runtime, db).then(resolve, reject)
+    } else {
+      resolve()
+    }
+  }, 0)
   timer.unref?.()
-  return finish
+  return promise
 }
 
 /** At startup: continue what a restart interrupted between a report and its follow-up. */
