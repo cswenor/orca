@@ -25,6 +25,9 @@ import {
 } from '../orchestration/callers/orchestration-session-caller'
 import { admitOrchestrationPeerCall } from '../orchestration/callers/orchestration-peer-caller'
 import { waitForRestoredWorkerCallerIdentity } from '../orchestration/callers/worker-caller-identity-restore-wait'
+import { checkDeclaredOrchestrationAccess } from '../methods/orchestration/access/orchestration-method-access'
+import { isSelectiveAckRequest } from '../orchestration/callers/selective-ack-caller'
+import { rpcCallContext } from '../rpc-call-context'
 
 type RpcRequestAdmissionDeps = {
   runtime: OrcaRuntimeService
@@ -100,6 +103,17 @@ export function admitRpcRequest<M extends RpcMethod | RpcStreamingMethod>(
           `Method ${request.method} requires a streaming transport`
         )
       )
+    }
+    if (isSelectiveAckRequest(request) && method.orchestrationAccess) {
+      try {
+        checkDeclaredOrchestrationAccess(
+          method.orchestrationAccess,
+          parsedParams.value,
+          rpcCallContext(runtime, request, options, pinnedCallerScope, caller, parsedParams.value)
+        )
+      } catch (error) {
+        return reject(mapDispatcherError(request, meta, error))
+      }
     }
     return { method, request, caller, params: parsedParams.value }
   }

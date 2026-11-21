@@ -272,6 +272,45 @@ describe('legacy compatibility after explicit takeover', () => {
     ).resolves.toMatchObject({ ok: true, result: { markedIds: [mail.id] } })
   })
 
+  it('does not fence an explicit direct mailbox on a former legacy worker pane', async () => {
+    const h = createHarness()
+    await expect(
+      h.dispatcher.dispatch(
+        request(
+          'orchestration.check',
+          { terminal: WORKER_HANDLE, peek: true },
+          evidence('worker'),
+          'record-legacy-worker'
+        )
+      )
+    ).resolves.toMatchObject({ ok: true })
+    expect(
+      h.db.db.prepare("UPDATE legacy_compatibility_principals SET status = 'settled'").run().changes
+    ).toBe(1)
+    h.db.db
+      .prepare("UPDATE dispatch_contexts SET status = 'completed' WHERE id = ?")
+      .run(h.dispatchId)
+    vi.mocked(h.runtime.getTerminalPaneKey).mockReturnValue(WORKER_PANE)
+    const terminal = CURRENT_COORDINATOR_HANDLE
+    const selected = h.db.insertMessage({ from: 'sender', to: terminal, subject: 'selected' })
+    const unselected = h.db.insertMessage({ from: 'sender', to: terminal, subject: 'unselected' })
+    const proof = { ...evidence('current-coordinator'), paneKey: WORKER_PANE }
+    const scope = { terminal, run: 'run_unbound' }
+    await expect(
+      h.dispatcher.dispatch(
+        request(
+          'orchestration.ackMessages',
+          { ...scope, ackIds: [selected.id] },
+          proof,
+          'direct-ack'
+        )
+      )
+    ).resolves.toMatchObject({ ok: true, result: { markedIds: [selected.id] } })
+    await expect(
+      h.dispatcher.dispatch(request('orchestration.check', scope, proof, 'direct-take'))
+    ).resolves.toMatchObject({ ok: true, result: { messages: [{ id: unselected.id }] } })
+  })
+
   it('keeps an active legacy worker usable across authenticated takeover', async () => {
     const harness = createHarness()
     await expect(

@@ -6,6 +6,7 @@ import { getMessagesByIds } from '../../../orchestration/db/messages/messages-by
 import { structuredWorkerSession } from '../../../orchestration/terminal-authority/structured-sessions/structured-worker-authority'
 import { sessionIdFromStructuredWorkerIncarnation } from '../../../orchestration/terminal-authority/structured-sessions/structured-worker-incarnation'
 import { parsePaneKey } from '../../../../../shared/workspace-layout/stable-pane-id'
+import { agentSessionOwnerObservationIsLive } from '../../../../../shared/agent-session/lifecycle/leases/agent-session-lease-adjudication'
 import { assertSelectableDirectMailbox } from '../../methods/orchestration/messaging/check-direct'
 import type { OrcaRuntimeService } from '../../../orca-runtime'
 import { OrchestrationError } from '../../../orchestration/orchestration-error'
@@ -213,8 +214,7 @@ function stablePane(pane: string | null | undefined) {
 function currentWorkerLease(sessionId: string): readonly [string, number] | undefined {
   const session = structuredWorkerSession({ sessionId })
   return session.kind === 'here' &&
-    session.record.ownerObservation.claimStatus === 'live' &&
-    session.record.ownerObservation.handoffStage === null
+    agentSessionOwnerObservationIsLive(session.record.ownerObservation)
     ? [session.sessionId, session.record.currentFence]
     : undefined
 }

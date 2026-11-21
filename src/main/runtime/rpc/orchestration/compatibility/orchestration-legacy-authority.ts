@@ -152,13 +152,25 @@ export class LegacyCompatibilityAuthority {
     }
     const evidence = request.orchestrationCompatibilityEvidence
     const selective = isSelectiveAckRequest(request)
-    if (
-      unboundSelective &&
-      ((terminalHandle && db.isLegacyCoordinatorHandle(adoption.adopted_run_id, terminalHandle)) ||
-        (evidence?.terminalHandle &&
-          db.isLegacyCoordinatorHandle(adoption.adopted_run_id, evidence.terminalHandle)))
-    ) {
-      throw legacyReadOnlyError()
+    if (unboundSelective) {
+      const runId = adoption.adopted_run_id
+      // Explicit direct checks skip implicit legacy routing. Refuse a retained handle,
+      // not a different current caller using the same historical pane.
+      for (const handle of [evidence?.terminalHandle, terminalHandle]) {
+        if (
+          handle &&
+          (db.isLegacyCoordinatorHandle(runId, handle) ||
+            db.resolveLegacyCompatibilityPrincipalByIdentity({
+              runId,
+              role: 'worker',
+              terminalHandle: handle
+            }) ||
+            db.resolveLegacyWorkerCandidate({ runId, terminalHandle: handle }))
+        ) {
+          throw legacyReadOnlyError()
+        }
+      }
+      return undefined
     }
     const existingWorker = db.resolveLegacyCompatibilityPrincipalByIdentity({
       runId: adoption.adopted_run_id,

@@ -159,13 +159,23 @@ describe('a structured worker that names itself by session id', () => {
       terminal: ADDRESS_Y,
       ackIds: [declaredMail.id]
     })
-    for (const [request, id] of [
-      [injected, message.id],
-      [declared, declaredMail.id]
-    ] as const) {
-      expect(resultOf(await h.dispatch(request))).toMatchObject({ markedIds: [id] })
-      expect(resultOf(await h.dispatch(request))).toMatchObject({ mutation: { replayed: true } })
-    }
+    // A declared handle still consumes under ordinary authority, but its receipt must
+    // capture the lease after shared startup, not the unreconciled record on disk.
+    current.lease = { ...current.lease, unreconciled: true }
+    vi.mocked(h.runtime.ensureStructuredAgentSessionHost).mockImplementationOnce(async () => {
+      await Promise.resolve()
+      current.lease = { ...current.lease, unreconciled: false }
+    })
+    expect(resultOf(await h.dispatch(declared))).toMatchObject({ markedIds: [declaredMail.id] })
+    expect(resultOf(await h.dispatch(declared))).toMatchObject({ mutation: { replayed: true } })
+    current.lease = { ...current.lease, unreconciled: true }
+    expect(await h.dispatch(declared)).toMatchObject({
+      ok: false,
+      error: { code: 'request_mismatch' }
+    })
+    current.lease = { ...current.lease, unreconciled: false }
+    expect(resultOf(await h.dispatch(injected))).toMatchObject({ markedIds: [message.id] })
+    expect(resultOf(await h.dispatch(injected))).toMatchObject({ mutation: { replayed: true } })
     current.lease = { ...current.lease, runtimeFence: current.lease.runtimeFence + 1 }
     for (const request of [injected, declared]) {
       expect(await h.dispatch(request)).toMatchObject({

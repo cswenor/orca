@@ -2,6 +2,8 @@ import type { OrcaRuntimeService } from '../../../orca-runtime'
 import type { RpcRequest } from '../../core'
 import type { OrchestrationCallerField } from '../../methods/orchestration/access/orchestration-method-access'
 import { isDispatchMutationMessageType } from '../../../../../shared/rpc-contract/orchestration/orchestration-params'
+import { isStructuredWorkerHandle } from '../../../../../shared/orchestration/workers/structured-worker-handle'
+import { isSelectiveAckRequest } from './selective-ack-caller'
 
 // The calls a worker makes as itself, each fenced on its terminal's pane and process.
 const WORKER_REPORT_METHODS: ReadonlySet<string> = new Set([
@@ -37,12 +39,16 @@ export function waitForRestoredWorkerCallerIdentity(
   if (typeof handle !== 'string' || !handle || skipsIdentityCheck) {
     return null
   }
-  if (
-    !runtime.startupWorkerAuthority.isPending() ||
-    (runtime.getTerminalPaneKey(handle) !== null &&
-      runtime.getTerminalProcessIncarnation(handle) !== null)
-  ) {
-    return null
+  const waiting =
+    runtime.startupWorkerAuthority.isPending() &&
+    (runtime.getTerminalPaneKey(handle) === null ||
+      runtime.getTerminalProcessIncarnation(handle) === null)
+      ? runtime.startupWorkerAuthority.wait(signals)
+      : null
+  if (isSelectiveAckRequest(request) && isStructuredWorkerHandle(handle)) {
+    return waiting
+      ? waiting.then(() => runtime.ensureStructuredAgentSessionHost())
+      : runtime.ensureStructuredAgentSessionHost()
   }
-  return runtime.startupWorkerAuthority.wait(signals)
+  return waiting
 }

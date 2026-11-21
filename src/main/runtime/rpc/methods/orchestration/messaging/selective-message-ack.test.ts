@@ -462,12 +462,13 @@ it('replays only on the original process and implicit Run', async () => {
   const dispatcher = new RpcDispatcher({ runtime, methods: ORCHESTRATION_METHODS })
   let incarnation = 'pty:original'
   vi.mocked(runtime.getTerminalProcessIncarnation).mockImplementation(() => incarnation)
-  const acknowledge = () =>
+  const leaf = '44444444-4444-4444-8444-444444444444'
+  const acknowledge = (terminalPaneKey = `tab_test:${leaf}`) =>
     dispatcher.dispatch({
       id: 'rpc_selected_ack',
       authToken: 'test',
       method: 'orchestration.ackMessages',
-      params: { terminal: 'term_coord', ackIds: [selected.id] },
+      params: { terminal: 'term_coord', terminalPaneKey, ackIds: [selected.id] },
       orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
       orchestrationRequestId: 'selected_ack_retry'
     })
@@ -478,6 +479,14 @@ it('replays only on the original process and implicit Run', async () => {
   await expect(acknowledge()).resolves.toMatchObject({
     ok: true,
     result: { markedIds: [selected.id], mutation: { replayed: true } }
+  })
+  await expect(acknowledge(`tab_split:${leaf}`)).resolves.toMatchObject({
+    ok: true,
+    result: { mutation: { replayed: true } }
+  })
+  await expect(acknowledge(`peer:${leaf}`)).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'forbidden', data: { effectsApplied: false } }
   })
   incarnation = 'pty:replacement'
   await expect(acknowledge()).resolves.toMatchObject({
