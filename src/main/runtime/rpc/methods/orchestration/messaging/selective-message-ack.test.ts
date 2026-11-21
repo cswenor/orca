@@ -140,7 +140,7 @@ it('refuses a selected read message still in chat custody without marking the re
     message_id: held.id,
     session_id: 'session-owned-mail',
     operation_id: 'held-after-read',
-    minted_at_ms: Date.now()
+    minted_at_ms: 1
   })
   db.db.prepare('UPDATE messages SET read = 1 WHERE id = ?').run(held.id)
   await expect(
