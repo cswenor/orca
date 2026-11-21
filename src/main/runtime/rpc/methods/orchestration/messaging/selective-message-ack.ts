@@ -89,6 +89,8 @@ export function acknowledgeSelectedMessages(args: {
   const marked = new Set(markedIds)
   const response = {
     ...args.mailboxIdentity,
+    count: markedIds.length,
+    acknowledged: null,
     markedIds,
     alreadyReadIds: ids.filter((id) => !marked.has(id))
   }
