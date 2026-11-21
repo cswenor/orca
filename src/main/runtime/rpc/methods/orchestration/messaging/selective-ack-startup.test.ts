@@ -731,13 +731,15 @@ it.each(['retirement', 'write refusal'] as const)(
     vi.useFakeTimers()
     const db = new OrchestrationDb(':memory:')
     try {
-      const { runtime, write } = await createRuntime(db, { launchAgent: null })
+      const { runtime, write: runtimeWrite } = await createRuntime(db, { launchAgent: null })
       const pending = Promise.withResolvers<WriteSettlement>()
+      const refusedWrite = vi.fn<(ptyId: string, data: string) => boolean>(() => true)
+      const write = cancel === 'write refusal' ? refusedWrite : runtimeWrite
       if (cancel === 'write refusal') {
         runtime.setPtyController({
-          write,
+          write: refusedWrite,
           writeWithSettlement: (ptyId, data) => {
-            write(ptyId, data)
+            refusedWrite(ptyId, data)
             return pending.promise
           },
           kill: vi.fn(),
